@@ -25,6 +25,8 @@ final class RoutineBuilderWindowController {
         panel?.close()
         panel = nil
     }
+
+    var isVisible: Bool { panel != nil }
 }
 
 private struct RoutineBuilderView: View {

@@ -25,9 +25,23 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --toggle-pause  Pause or resume detection.
       --quit          Quit the running instance.
 
-      --status-check  Report whether the status item got a slot in the menu bar.
-      --help          Show this message.
+      --status-check      Report whether the status item got a slot in the menu bar.
+      --version           Print the current version and exit.
+      --check-update-now  Check GitHub for a newer release right now and exit.
+      --help              Show this message.
     """)
+    exit(0)
+}
+
+if arguments.contains("--version") {
+    print(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")
+    exit(0)
+}
+
+if arguments.contains("--check-update-now") {
+    Updater.shared.checkForUpdate()
+    // Give the check — and any staging download it kicks off — time to finish.
+    RunLoop.main.run(until: Date().addingTimeInterval(30))
     exit(0)
 }
 

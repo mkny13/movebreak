@@ -74,6 +74,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         wirePromptCallbacks()
         startPolling()
+
+        Updater.shared.isSafeToInstall = { [weak self] in
+            guard let self else { return false }
+            return !self.isPaused
+                && self.detector.state == .idle
+                && !self.prompt.isVisible
+                && !self.routineWindow.isVisible
+                && !self.routineBuilder.isVisible
+        }
+        Updater.shared.start()
     }
 
     private func wirePromptCallbacks() {
@@ -101,7 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // thread; the detector only calls back through onPromptDue.
             DispatchQueue.global(qos: .utility).async {
                 let result = self.detector.poll()
-                DispatchQueue.main.async { self.updateStatusTitle(result.state) }
+                DispatchQueue.main.async {
+                    self.updateStatusTitle(result.state)
+                    Updater.shared.installStagedUpdateIfPossible()
+                }
             }
         }
         pollTimer?.tolerance = 0.5
