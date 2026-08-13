@@ -1,0 +1,4 @@
+build/
+.build/
+MoveBreak.app/
+.DS_Store
