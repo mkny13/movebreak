@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
+        SessionLogger.shared.retryPendingSyncs()
 
         // The menu bar may be full, in which case the status item is never shown and this
         // is the only way to reach a running instance.
@@ -84,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         prompt.onDecline = { [weak self] in self?.detector.recordDecline() }
         prompt.onTimeout = { [weak self] in self?.detector.recordTimeout() }
+        routineWindow.onFinish = { routine, checkedIDs in
+            SessionLogger.shared.logCompletion(routine: routine, checkedIDs: checkedIDs)
+        }
     }
 
     // MARK: - Polling
