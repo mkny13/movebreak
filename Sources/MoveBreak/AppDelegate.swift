@@ -1,10 +1,12 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let detector = SessionDetector()
     private let prompt = PromptPanelController()
     private let routineWindow = RoutineWindowController()
+    private let routineBuilder = RoutineBuilderWindowController()
+    private let routineStore = RoutineStore.shared
 
     private var statusItem: NSStatusItem?
     private var pollTimer: Timer?
@@ -19,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             switch command {
             case .show:
-                self.prompt.show(for: self.detector.state == .idle ? .meeting : self.detector.state)
+                let state = self.detector.state == .idle ? .meeting : self.detector.state
+                self.prompt.show(for: state, routines: self.routineStore.resolvedRoutines)
             case .quit:
                 NSApplication.shared.terminate(nil)
             case .pause:
@@ -32,19 +35,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // --demo / --demo-pt show the panels straight away, so they can be checked
-        // without waiting to be in a real meeting.
+        // --demo / --demo-pt / --demo-builder show the panels straight away, so they can
+        // be checked without waiting to be in a real meeting.
         if CommandLine.arguments.contains("--demo-pt") {
             wirePromptCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.routineWindow.show(Routines.physicalTherapy)
+                guard let self, let pt = self.routineStore.resolvedRoutines.first(where: { $0.key == "pt" })
+                    ?? self.routineStore.resolvedRoutines.first
+                else { return }
+                self.routineWindow.show(pt.shuffledForSession())
             }
             return
         }
         if CommandLine.arguments.contains("--demo") {
             wirePromptCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.prompt.show(for: .meeting)
+                guard let self else { return }
+                self.prompt.show(for: .meeting, routines: self.routineStore.resolvedRoutines)
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--demo-builder") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self else { return }
+                self.routineBuilder.show(store: self.routineStore)
             }
             return
         }
@@ -54,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         detector.onPromptDue = { [weak self] state in
             onMain {
                 guard let self, !self.isPaused else { return }
-                self.prompt.show(for: state)
+                self.prompt.show(for: state, routines: self.routineStore.resolvedRoutines)
             }
         }
         wirePromptCallbacks()
@@ -65,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prompt.onChoose = { [weak self] routine in
             onMain {
                 self?.detector.recordRoutineStarted()
-                self?.routineWindow.show(routine)
+                self?.routineWindow.show(routine.shuffledForSession())
             }
         }
         prompt.onDecline = { [weak self] in self?.detector.recordDecline() }
@@ -127,8 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The routine list is now user-editable (`RoutineStore`), so the menu is built once
+    /// with a placeholder gap between two separators, and `refreshRoutineItems` refills
+    /// that gap on every open — see `menuNeedsUpdate`.
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = self
 
         let status = NSMenuItem(title: "Watching for meetings…", action: nil, keyEquivalent: "")
         status.isEnabled = false
@@ -136,16 +154,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(status)
         menu.addItem(.separator())
 
-        for routine in Routines.all {
-            let item = NSMenuItem(
-                title: routine.title,
-                action: #selector(startRoutine(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = routine.key
-            menu.addItem(item)
-        }
+        let routinesEnd = NSMenuItem.separator()
+        routinesEnd.tag = MenuTag.routinesEnd.rawValue
+        menu.addItem(routinesEnd)
+
+        let editRoutines = NSMenuItem(
+            title: "Edit Routines…",
+            action: #selector(editRoutines(_:)),
+            keyEquivalent: ""
+        )
+        editRoutines.target = self
+        menu.addItem(editRoutines)
 
         menu.addItem(.separator())
 
@@ -165,12 +184,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.addItem(quit)
 
+        refreshRoutineItems(in: menu)
         return menu
+    }
+
+    /// Removes whatever routine items are currently sitting before the `routinesEnd`
+    /// separator and re-adds one per routine that has at least one exercise picked.
+    private func refreshRoutineItems(in menu: NSMenu) {
+        guard let endIndex = menu.items.firstIndex(where: { $0.tag == MenuTag.routinesEnd.rawValue })
+        else { return }
+
+        // Routine items sit between the first separator (index 1) and `routinesEnd`.
+        for index in stride(from: endIndex - 1, through: 2, by: -1) {
+            menu.removeItem(at: index)
+        }
+
+        for (offset, routine) in routineStore.resolvedRoutines.enumerated() {
+            let item = NSMenuItem(
+                title: routine.title,
+                action: #selector(startRoutine(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = routine.key
+            menu.insertItem(item, at: 2 + offset)
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshRoutineItems(in: menu)
     }
 
     private enum MenuTag: Int {
         case status = 1
         case pause = 2
+        case routinesEnd = 3
     }
 
     private func updateStatusTitle(_ state: SessionState) {
@@ -190,10 +238,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func startRoutine(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String,
-              let routine = Routines.routine(key: key) else { return }
+              let routine = routineStore.resolvedRoutines.first(where: { $0.key == key })
+        else { return }
         prompt.dismiss(cancelTimer: true)
         detector.recordRoutineStarted()
-        routineWindow.show(routine)
+        routineWindow.show(routine.shuffledForSession())
+    }
+
+    @objc private func editRoutines(_ sender: NSMenuItem) {
+        routineBuilder.show(store: routineStore)
     }
 
     @objc private func togglePause(_ sender: NSMenuItem) {

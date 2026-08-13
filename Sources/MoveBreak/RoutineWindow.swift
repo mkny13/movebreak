@@ -32,7 +32,7 @@ private struct RoutineView: View {
     let routine: Routine
     let onDone: () -> Void
 
-    @State private var checked: Set<UUID> = []
+    @State private var checked: Set<String> = []
 
     private var grouped: [(area: String, exercises: [Exercise])] {
         // Preserve authored order rather than sorting — routines are deliberately

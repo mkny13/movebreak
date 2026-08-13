@@ -14,14 +14,18 @@ final class PromptPanelController {
     var onDecline: (() -> Void)?
     var onTimeout: (() -> Void)?
 
-    func show(for state: SessionState) {
+    /// Routines vary in count now that they come from `RoutineStore`, so the panel's
+    /// height grows with them rather than being fixed.
+    func show(for state: SessionState, routines: [Routine]) {
         dismiss(cancelTimer: true)
 
-        let panel = FloatingPanel(size: NSSize(width: 360, height: 296), title: "MoveBreak")
+        let rowCount = routines.count + 1  // + "Not now"
+        let height = min(620, 112 + CGFloat(rowCount) * 46)
+        let panel = FloatingPanel(size: NSSize(width: 360, height: height), title: "MoveBreak")
         panel.setContent(
             PromptView(
                 state: state,
-                routines: Routines.all,
+                routines: routines,
                 onChoose: { [weak self] routine in
                     self?.dismiss(cancelTimer: true)
                     self?.onChoose?(routine)
@@ -81,32 +85,29 @@ private struct PromptView: View {
                     .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 6) {
-                ForEach(Array(routines.enumerated()), id: \.element.id) { index, routine in
-                    ChoiceButton(
-                        number: index + 1,
-                        title: routine.title,
-                        detail: "\(routine.subtitle) · ~\(routine.estimatedMinutes) min",
-                        prominent: true
-                    ) {
-                        onChoose(routine)
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(Array(routines.enumerated()), id: \.element.id) { index, routine in
+                        numberedChoice(
+                            number: index + 1,
+                            title: routine.title,
+                            detail: "\(routine.subtitle) · ~\(routine.estimatedMinutes) min",
+                            prominent: true
+                        ) {
+                            onChoose(routine)
+                        }
                     }
-                    .keyboardShortcut(
-                        KeyEquivalent(Character("\(index + 1)")), modifiers: []
-                    )
-                }
 
-                ChoiceButton(
-                    number: routines.count + 1,
-                    title: "Not now",
-                    detail: "Skip for the rest of this session",
-                    prominent: false
-                ) {
-                    onDecline()
+                    ChoiceButton(
+                        badge: "esc",
+                        title: "Not now",
+                        detail: "Skip for the rest of this session",
+                        prominent: false
+                    ) {
+                        onDecline()
+                    }
+                    .keyboardShortcut(.cancelAction)
                 }
-                .keyboardShortcut(
-                    KeyEquivalent(Character("\(routines.count + 1)")), modifiers: []
-                )
             }
 
             Spacer(minLength: 0)
@@ -114,10 +115,26 @@ private struct PromptView: View {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    /// `Character("10")` traps — routine counts are user-defined now, so past 9 a choice
+    /// still shows its number but drops the keyboard shortcut rather than crashing.
+    @ViewBuilder
+    private func numberedChoice(
+        number: Int, title: String, detail: String, prominent: Bool, action: @escaping () -> Void
+    ) -> some View {
+        let button = ChoiceButton(
+            badge: "\(number)", title: title, detail: detail, prominent: prominent, action: action
+        )
+        if number <= 9 {
+            button.keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: [])
+        } else {
+            button
+        }
+    }
 }
 
 private struct ChoiceButton: View {
-    let number: Int
+    let badge: String
     let title: String
     let detail: String
     let prominent: Bool
@@ -126,10 +143,10 @@ private struct ChoiceButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Text("\(number)")
+                Text(badge)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 14)
+                    .frame(width: 20)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)

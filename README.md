@@ -164,12 +164,15 @@ in, which is the fastest way to see why something wasn't detected.
 ### The UI
 
 ```bash
-./MoveBreak.app/Contents/MacOS/MoveBreak --demo      # the 4-choice prompt
-./MoveBreak.app/Contents/MacOS/MoveBreak --demo-pt   # the PT checklist
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo           # the routine-choice prompt
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo-pt         # the PT checklist
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo-builder    # the routine editor
 ```
 
-Shows the panels immediately without waiting for a meeting. Confirmed rendering correctly
-via screenshot: 360×296, `NSFloatingWindowLevel`, top-right of the active screen.
+Shows the panels immediately without waiting for a meeting. `NSFloatingWindowLevel`,
+top-right of the active screen (the editor is centered instead — it's opened
+deliberately, not tied to a meeting). The original fixed sizing here (360×296) no longer
+applies to the prompt: its height now grows with however many routines are saved.
 
 **Confirmed fixed — was a real crash.** The first build aborted (`SIGABRT`) every time
 detection tried to show the prompt: `NSPanel` was being created from the background polling
@@ -278,19 +281,30 @@ Behavior worth knowing:
 
 ## Exercise content
 
-Three routines in `Routines.swift`, written for **standing at a treadmill desk**, each
-exercise tagged for whether you need to stop walking:
+All exercises live in one catalog (`ExerciseCatalog.swift`), written for **standing at a
+treadmill desk**, each tagged for whether you need to stop walking:
 
 - 🚶 fine while the belt is running — jaw, neck, trap, shoulder work
 - ⏸ pause the treadmill — anything needing balance, the floor, or a foot off the belt
 
-**Do PT** (~8 min) — sciatic, jaw/TMJ, trap/levator, plantar fascia. Ordered so the
-walk-safe upper-body work comes first: if you only get halfway, you've done the part that
-needs no pause.
+Routines are user-defined picks from that catalog (`RoutineStore.swift`), editable from
+the menu bar's **Edit Routines…** item — pick exercises into as many named routines as you
+want; a routine with nothing picked just doesn't show up in the prompt or menu. The app
+ships with three starter routines seeded from the catalog, identical in content to what
+used to be hardcoded:
+
+**Do PT** (~8 min) — sciatic, jaw/TMJ, trap/levator, plantar fascia.
 
 **Workout** (~10 min) — bodyweight strength at the desk.
 
 **Just Stretch** (~4 min) — mostly walk-safe; the one to pick when you don't want to stop.
+
+Each time a routine is started, `Routine.shuffledForSession()` reorders it: walk-safe
+exercises are shuffled among themselves and shown first, pause-treadmill exercises are
+shuffled among themselves and shown after. That's the one constraint kept from the old
+hand-authored PT ordering — don't make someone stop the treadmill before the work that
+doesn't need it — layered under a semi-randomized order so a routine doesn't play out
+identically every session.
 
 The `Exercise` model carries a `posture` field that MVP only populates with `.standing`, so
 adding the "Sitting at Desk" mode later is a content change rather than a refactor.
@@ -317,9 +331,12 @@ Sources/MoveBreak/
   BrowserTabInspector.swift   AppleScript tab query + classification rules
   SessionDetector.swift       3-stage classify, debounce, session lifecycle
   FloatingPanel.swift         the NSPanel setup that floats over full-screen Zoom
-  PromptPanel.swift           4-choice popup (keys 1-4)
-  RoutineWindow.swift         checklist window
-  Routines.swift              exercise models + content
+  PromptPanel.swift           routine-choice popup (keys 1-9, esc for "Not now")
+  RoutineWindow.swift         checklist window for a session's shuffled routine
+  RoutineBuilderWindow.swift  "Edit Routines…" catalog picker
+  ExerciseCatalog.swift       the full exercise library, Exercise/TreadmillTag/Posture
+  RoutineStore.swift          user-defined routines: persistence, CRUD, default seeds
+  Routines.swift              Routine model + shuffledForSession()
   Preferences.swift           UserDefaults-backed tuning
   Diagnose.swift              --diagnose live table
   TabProbe.swift              --tabs one-shot browser check

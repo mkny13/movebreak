@@ -68,4 +68,11 @@ final class FloatingPanel: NSPanel {
         positionTopRight()
         orderFrontRegardless()
     }
+
+    /// For deliberately-opened windows (settings-style, not a meeting overlay) where
+    /// top-right placement would just be an odd spot to land.
+    func presentCentered() {
+        center()
+        orderFrontRegardless()
+    }
 }

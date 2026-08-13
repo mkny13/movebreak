@@ -55,6 +55,38 @@ enum SelfTest {
         }
     }
 
+    /// Catches two ways the catalog/seed split could silently break: two exercises
+    /// slugging to the same id (the picker couldn't tell them apart), or a default seed
+    /// referencing a name that doesn't match anything in the catalog (it would just
+    /// vanish from "Do PT" etc. with no error).
+    private static func runCatalogCases() -> Int {
+        var failures = 0
+
+        var seen: Set<String> = []
+        for exercise in ExerciseCatalog.all {
+            if seen.contains(exercise.id) {
+                failures += 1
+                print("✗ FAIL  duplicate catalog id \"\(exercise.id)\" (from \"\(exercise.name)\")")
+            }
+            seen.insert(exercise.id)
+        }
+        if failures == 0 {
+            print("✓  \(ExerciseCatalog.all.count) catalog exercises, all ids unique")
+        }
+
+        for seed in RoutineStore.defaultSeeds {
+            let missing = seed.exerciseIDs.filter { ExerciseCatalog.exercise(id: $0) == nil }
+            if missing.isEmpty {
+                print("✓  seed \"\(seed.name)\" resolves all \(seed.exerciseIDs.count) picks")
+            } else {
+                failures += 1
+                print("✗ FAIL  seed \"\(seed.name)\" has ids missing from the catalog: \(missing)")
+            }
+        }
+
+        return failures
+    }
+
     static func run() -> Never {
         let cases: [Case] = [
             // The original distinction: a paused tab never reaches this code at all
@@ -177,6 +209,9 @@ enum SelfTest {
         print(String(repeating: "─", count: 78))
         print("Bundle identity (helper process → owning app)")
         failures += runIdentityCases()
+        print("")
+        print("Exercise catalog + default routines")
+        failures += runCatalogCases()
         print("")
         print("Video vs music classification")
 

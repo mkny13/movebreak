@@ -12,8 +12,9 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --self-test  Run the video-vs-music classification cases and exit.
       --tabs       Show what your browsers have open and how it would classify.
                    Add --verbose for full URLs instead of hosts.
-      --demo       Launch and show the prompt immediately.
-      --demo-pt    Launch and show the PT checklist immediately.
+      --demo          Launch and show the prompt immediately.
+      --demo-pt       Launch and show the PT checklist immediately.
+      --demo-builder  Launch and show the routine editor immediately.
 
     Control an already-running instance (works when the menu bar is full and the
     status item cannot be shown):
