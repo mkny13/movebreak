@@ -137,6 +137,15 @@ enum Preferences {
     /// Cache lifetime for AppleScript tab reads, so a 2s poll doesn't spam Apple Events.
     static var tabCacheLifetime: TimeInterval { double(forKey: "tabCacheLifetime", default: 5.0) }
 
+    // MARK: - Notion
+
+    /// Not a secret — the integration token lives in the Keychain instead. Set via
+    /// `--configure-notion`.
+    static var notionDatabaseID: String? {
+        get { defaults.string(forKey: "notionDatabaseID") }
+        set { defaults.set(newValue, forKey: "notionDatabaseID") }
+    }
+
     // MARK: - Accessors
 
     private static func stringSet(forKey key: String, default fallback: Set<String>) -> Set<String> {

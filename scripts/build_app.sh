@@ -31,6 +31,7 @@ swiftc -O \
     -framework AppKit \
     -framework SwiftUI \
     -framework CoreAudio \
+    -framework Security \
     -o build/MoveBreak \
     Sources/MoveBreak/*.swift
 

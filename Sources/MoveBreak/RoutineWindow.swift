@@ -6,16 +6,16 @@ import SwiftUI
 final class RoutineWindowController {
 
     private var panel: FloatingPanel?
-    var onFinish: (() -> Void)?
+    var onFinish: ((Routine, Set<String>) -> Void)?
 
     func show(_ routine: Routine) {
         close()
 
         let panel = FloatingPanel(size: NSSize(width: 380, height: 520), title: routine.title)
         panel.setContent(
-            RoutineView(routine: routine) { [weak self] in
+            RoutineView(routine: routine) { [weak self] checked in
                 self?.close()
-                self?.onFinish?()
+                self?.onFinish?(routine, checked)
             }
         )
         panel.present()
@@ -30,7 +30,7 @@ final class RoutineWindowController {
 
 private struct RoutineView: View {
     let routine: Routine
-    let onDone: () -> Void
+    let onDone: (Set<String>) -> Void
 
     @State private var checked: Set<String> = []
 
@@ -117,7 +117,7 @@ private struct RoutineView: View {
             Text("\(TreadmillTag.walkSafe.badge) keep walking")
             Text("\(TreadmillTag.pauseTreadmill.badge) pause belt")
             Spacer(minLength: 0)
-            Button("Done", action: onDone)
+            Button("Done") { onDone(checked) }
                 .keyboardShortcut(.defaultAction)
         }
         .font(.caption2)

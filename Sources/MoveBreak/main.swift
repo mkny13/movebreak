@@ -16,6 +16,8 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --demo-pt       Launch and show the PT checklist immediately.
       --demo-builder  Launch and show the routine editor immediately.
 
+      --configure-notion  Set up Notion session logging (integration token + database ID).
+
     Control an already-running instance (works when the menu bar is full and the
     status item cannot be shown):
 
@@ -43,6 +45,10 @@ if arguments.contains("--tabs") {
 
 if arguments.contains("--diagnose") {
     Diagnose.run()
+}
+
+if arguments.contains("--configure-notion") {
+    NotionSetup.run()
 }
 
 let application = NSApplication.shared
