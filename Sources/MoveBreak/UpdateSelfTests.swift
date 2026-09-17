@@ -71,7 +71,6 @@ enum UpdateSelfTests {
         )
 
         let processFixture = SelfTestTemporaryDirectory(prefix: "movebreak-process-runner")
-        defer { processFixture.cleanup() }
         let fixtureDir = processFixture.url
         let ignoresTermURL = fixtureDir.appendingPathComponent("ignores-term.sh")
         do {
@@ -80,10 +79,16 @@ enum UpdateSelfTests {
             try Data(script.utf8).write(to: ignoresTermURL)
             guard chmod(ignoresTermURL.path, 0o700) == 0 else {
                 reporter.check("termination-resistant helper fixture is executable", false)
+                do { try processFixture.cleanup() } catch {
+                    reporter.check("process runner fixture cleanup after setup failure", false, detail: "\(error)")
+                }
                 return reporter.failureCount
             }
         } catch {
             reporter.check("termination-resistant helper fixture is created", false, detail: "\(error)")
+            do { try processFixture.cleanup() } catch {
+                reporter.check("process runner fixture cleanup after setup failure", false, detail: "\(error)")
+            }
             return reporter.failureCount
         }
 
@@ -121,6 +126,13 @@ enum UpdateSelfTests {
         reporter.check("repeated process runs leave file-descriptor count stable",
               repeatsPassed && descriptorsAfter == descriptorsBefore,
               detail: "before=\(descriptorsBefore), after=\(descriptorsAfter)")
+
+        do {
+            try processFixture.cleanup()
+            reporter.check("process runner temporary fixture is removed", true)
+        } catch {
+            reporter.check("process runner temporary fixture is removed", false, detail: "\(error)")
+        }
 
         return reporter.failureCount
     }
@@ -291,13 +303,21 @@ enum UpdateSelfTests {
 
         // 5. Archive SHA-256 Digest Verification & Tampering
         let updateFixture = SelfTestTemporaryDirectory(prefix: "movebreak-update-test")
-        defer { updateFixture.cleanup() }
         let tempFixtureDir = updateFixture.url
-        try? updateFixture.create()
+        do {
+            try updateFixture.create()
+        } catch {
+            reporter.check("update fixture directory is created", false, detail: "\(error)")
+            return reporter.failureCount
+        }
 
         let sampleArchiveURL = tempFixtureDir.appendingPathComponent("test.zip")
         let testPayload = Data("MoveBreakSecurePayloadData123456789".utf8)
-        try? testPayload.write(to: sampleArchiveURL)
+        do {
+            try testPayload.write(to: sampleArchiveURL)
+        } catch {
+            reporter.check("sample update archive is written", false, detail: "\(error)")
+        }
 
         if let computedHex = try? ArchiveDigestValidation.computeSHA256(at: sampleArchiveURL) {
             var verifyPassed = false
@@ -592,6 +612,13 @@ enum UpdateSelfTests {
                 strictVerifyPassed = true
             } catch {}
             reporter.check("strict code signature verification succeeds on un-tampered bundle", passed: strictVerifyPassed)
+        }
+
+        do {
+            try updateFixture.cleanup()
+            reporter.check("update trust temporary fixture is removed", true)
+        } catch {
+            reporter.check("update trust temporary fixture is removed", false, detail: "\(error)")
         }
 
         return reporter.failureCount

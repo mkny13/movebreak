@@ -16,8 +16,8 @@ final class SelfTestTemporaryDirectory {
     let url: URL
     private var isCleanedUp = false
 
-    init(prefix: String) {
-        url = URL(fileURLWithPath: NSTemporaryDirectory())
+    init(prefix: String, baseURL: URL = URL(fileURLWithPath: NSTemporaryDirectory())) {
+        url = baseURL
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     }
 
@@ -30,15 +30,43 @@ final class SelfTestTemporaryDirectory {
         )
     }
 
-    func cleanup() {
+    func cleanup(removeItem: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) throws {
         guard !isCleanedUp else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            isCleanedUp = true
+            return
+        }
+        guard chmod(url.path, 0o700) == 0 else {
+            throw SelfTestInfrastructureError.posix(operation: "chmod temporary directory", code: errno)
+        }
+        try removeItem(url)
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw SelfTestInfrastructureError.fixtureCleanupFailed(path: url.path)
+        }
         isCleanedUp = true
-        _ = chmod(url.path, 0o700)
-        try? FileManager.default.removeItem(at: url)
     }
 
     deinit {
-        cleanup()
+        // Explicit cleanup is required so failures can be reported by the owning test. This is
+        // only a last-resort attempt for an early return or an unexpected test bug.
+        try? cleanup()
+    }
+}
+
+enum SelfTestInfrastructureError: Error, CustomStringConvertible {
+    case posix(operation: String, code: Int32)
+    case fixtureCleanupFailed(path: String)
+    case invalidUTF8(stream: String)
+
+    var description: String {
+        switch self {
+        case .posix(let operation, let code):
+            return "\(operation) failed: \(String(cString: strerror(code))) (errno \(code))"
+        case .fixtureCleanupFailed(let path):
+            return "temporary fixture still exists after cleanup: \(path)"
+        case .invalidUTF8(let stream):
+            return "captured \(stream) was not valid UTF-8"
+        }
     }
 }
 
@@ -72,83 +100,133 @@ final class SelfTestReporter {
 }
 
 enum SelfTestSupport {
-    static func withStandardInput<T>(from descriptor: Int32, perform: () -> T) -> T? {
+    static func withStandardInput<T>(from descriptor: Int32, perform: () -> T) throws -> T {
         let savedInput = dup(STDIN_FILENO)
-        guard savedInput >= 0 else { return nil }
+        guard savedInput >= 0 else {
+            throw SelfTestInfrastructureError.posix(operation: "duplicate stdin", code: errno)
+        }
         guard dup2(descriptor, STDIN_FILENO) >= 0 else {
+            let code = errno
             close(savedInput)
-            return nil
+            throw SelfTestInfrastructureError.posix(operation: "redirect stdin", code: code)
         }
-        defer {
-            _ = dup2(savedInput, STDIN_FILENO)
+        let result = perform()
+        guard dup2(savedInput, STDIN_FILENO) >= 0 else {
+            let code = errno
             close(savedInput)
+            throw SelfTestInfrastructureError.posix(operation: "restore stdin", code: code)
         }
-        return perform()
+        close(savedInput)
+        return result
     }
 
-    static func captureOutput(block: () -> Void) -> (stdout: String, stderr: String) {
+    static func captureOutput(
+        pipeFactory: (UnsafeMutablePointer<Int32>) -> Int32 = { Darwin.pipe($0) },
+        block: () -> Void
+    ) throws -> (stdout: String, stderr: String) {
         var outPipe: [Int32] = [-1, -1]
         var errPipe: [Int32] = [-1, -1]
-        guard pipe(&outPipe) == 0 else { return ("", "") }
-        guard pipe(&errPipe) == 0 else {
+        let outPipeResult = outPipe.withUnsafeMutableBufferPointer {
+            pipeFactory($0.baseAddress!)
+        }
+        guard outPipeResult == 0 else {
+            throw SelfTestInfrastructureError.posix(operation: "create stdout capture pipe", code: errno)
+        }
+        let errPipeResult = errPipe.withUnsafeMutableBufferPointer {
+            pipeFactory($0.baseAddress!)
+        }
+        guard errPipeResult == 0 else {
+            let code = errno
             close(outPipe[0])
             close(outPipe[1])
-            return ("", "")
+            throw SelfTestInfrastructureError.posix(operation: "create stderr capture pipe", code: code)
         }
 
         let savedOut = dup(STDOUT_FILENO)
         let savedErr = dup(STDERR_FILENO)
         guard savedOut >= 0, savedErr >= 0 else {
+            let code = errno
             if savedOut >= 0 { close(savedOut) }
             if savedErr >= 0 { close(savedErr) }
             outPipe.forEach { close($0) }
             errPipe.forEach { close($0) }
-            return ("", "")
+            throw SelfTestInfrastructureError.posix(operation: "duplicate standard output", code: code)
         }
 
         fflush(stdout)
         fflush(stderr)
-        _ = dup2(outPipe[1], STDOUT_FILENO)
-        _ = dup2(errPipe[1], STDERR_FILENO)
-        close(outPipe[1])
-        close(errPipe[1])
-
-        defer {
-            fflush(stdout)
-            fflush(stderr)
-            _ = dup2(savedOut, STDOUT_FILENO)
-            _ = dup2(savedErr, STDERR_FILENO)
+        guard dup2(outPipe[1], STDOUT_FILENO) >= 0 else {
+            let code = errno
             close(savedOut)
             close(savedErr)
+            outPipe.forEach { close($0) }
+            errPipe.forEach { close($0) }
+            throw SelfTestInfrastructureError.posix(operation: "redirect stdout", code: code)
         }
+        guard dup2(errPipe[1], STDERR_FILENO) >= 0 else {
+            let code = errno
+            _ = dup2(savedOut, STDOUT_FILENO)
+            close(savedOut)
+            close(savedErr)
+            outPipe.forEach { close($0) }
+            errPipe.forEach { close($0) }
+            throw SelfTestInfrastructureError.posix(operation: "redirect stderr", code: code)
+        }
+        close(outPipe[1])
+        close(errPipe[1])
 
         block()
         fflush(stdout)
         fflush(stderr)
 
-        _ = dup2(savedOut, STDOUT_FILENO)
-        _ = dup2(savedErr, STDERR_FILENO)
+        let restoreOutResult = dup2(savedOut, STDOUT_FILENO)
+        let restoreOutError = errno
+        let restoreErrResult = dup2(savedErr, STDERR_FILENO)
+        let restoreErrError = errno
+        close(savedOut)
+        close(savedErr)
+        guard restoreOutResult >= 0 else {
+            close(outPipe[0])
+            close(errPipe[0])
+            throw SelfTestInfrastructureError.posix(operation: "restore stdout", code: restoreOutError)
+        }
+        guard restoreErrResult >= 0 else {
+            close(outPipe[0])
+            close(errPipe[0])
+            throw SelfTestInfrastructureError.posix(operation: "restore stderr", code: restoreErrError)
+        }
 
-        func readPipe(_ descriptor: Int32) -> String {
+        func readPipe(_ descriptor: Int32, stream: String) throws -> String {
             defer { close(descriptor) }
             var data = Data()
             var buffer = [UInt8](repeating: 0, count: 1024)
-            let flags = fcntl(descriptor, F_GETFL, 0)
-            if flags >= 0 {
-                _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
-            }
             while true {
                 let count = read(descriptor, &buffer, buffer.count)
                 if count > 0 {
                     data.append(buffer, count: count)
+                } else if count < 0 && errno == EINTR {
+                    continue
+                } else if count < 0 {
+                    throw SelfTestInfrastructureError.posix(operation: "read captured \(stream)", code: errno)
                 } else {
                     break
                 }
             }
-            return String(data: data, encoding: .utf8) ?? ""
+            guard let value = String(data: data, encoding: .utf8) else {
+                throw SelfTestInfrastructureError.invalidUTF8(stream: stream)
+            }
+            return value
         }
 
-        return (readPipe(outPipe[0]), readPipe(errPipe[0]))
+        let capturedOut: String
+        do {
+            capturedOut = try readPipe(outPipe[0], stream: "stdout")
+        } catch {
+            close(errPipe[0])
+            throw error
+        }
+        let capturedErr = try readPipe(errPipe[0], stream: "stderr")
+        return (capturedOut, capturedErr)
     }
 
     static func posixMode(at path: String) -> Int? {

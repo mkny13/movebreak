@@ -2,6 +2,18 @@ import Darwin
 import Foundation
 
 enum SecuritySelfTests {
+    private static func removeDefaultsDomain(
+        _ defaults: UserDefaults,
+        named suiteName: String,
+        reporter: SelfTestReporter
+    ) {
+        defaults.removePersistentDomain(forName: suiteName)
+        reporter.check(
+            "isolated UserDefaults domain is removed",
+            defaults.persistentDomain(forName: suiteName) == nil
+        )
+    }
+
     private static func runNumericPreferencesCases() -> Int {
         let reporter = SelfTestReporter()
         let suiteName = "com.mike.movebreak.tests.numeric.\(UUID().uuidString)"
@@ -9,9 +21,7 @@ enum SecuritySelfTests {
             reporter.check("could not instantiate isolated UserDefaults suite", false)
             return reporter.failureCount
         }
-        defer {
-            testDefaults.removePersistentDomain(forName: suiteName)
-        }
+        reporter.check("numeric preferences domain starts absent", testDefaults.persistentDomain(forName: suiteName) == nil)
 
         Preferences.withDefaults(testDefaults) {
             // Unconfigured values fall back to documented safe defaults
@@ -96,6 +106,8 @@ enum SecuritySelfTests {
             reporter.check("tabCacheLifetime valid accepted", expected: 10.0, actual: Preferences.tabCacheLifetime)
         }
 
+        removeDefaultsDomain(testDefaults, named: suiteName, reporter: reporter)
+
         return reporter.failureCount
     }
 
@@ -108,9 +120,7 @@ enum SecuritySelfTests {
             reporter.check("could not instantiate isolated UserDefaults suite", false)
             return reporter.failureCount
         }
-        defer {
-            testDefaults.removePersistentDomain(forName: suiteName)
-        }
+        reporter.check("list preferences domain starts absent", testDefaults.persistentDomain(forName: suiteName) == nil)
 
         Preferences.withDefaults(testDefaults) {
             // Empty array falls back to default
@@ -161,6 +171,9 @@ enum SecuritySelfTests {
                 actual: Preferences.ignoredApps
             )
         }
+
+
+        removeDefaultsDomain(testDefaults, named: suiteName, reporter: reporter)
 
         return reporter.failureCount
     }
@@ -351,9 +364,7 @@ enum SecuritySelfTests {
             reporter.check("could not instantiate isolated UserDefaults suite", false)
             return reporter.failureCount
         }
-        defer {
-            testDefaults.removePersistentDomain(forName: suiteName)
-        }
+        reporter.check("browser preferences domain starts absent", testDefaults.persistentDomain(forName: suiteName) == nil)
 
         Preferences.withDefaults(testDefaults) {
             // Attempting to configure an unsupported browser is rejected
@@ -438,6 +449,8 @@ enum SecuritySelfTests {
             actual: inspectorInvoked
         )
 
+        removeDefaultsDomain(testDefaults, named: suiteName, reporter: reporter)
+
         return reporter.failureCount
     }
 
@@ -469,16 +482,25 @@ enum SecuritySelfTests {
         var slave: Int32 = 0
         if openpty(&master, &slave, nil, nil, nil) == 0 {
             let secretPayload = "sentinel_pty_secret_pass\n"
-            write(master, secretPayload, secretPayload.utf8.count)
-            let result = SelfTestSupport.withStandardInput(from: slave) {
-                var before = termios()
-                tcgetattr(STDIN_FILENO, &before)
-                let echoEnabledInitially = (before.c_lflag & tcflag_t(ECHO)) != 0
-                let readValue = SecretInput.readSecret(prompt: nil)
-                var after = termios()
-                tcgetattr(STDIN_FILENO, &after)
-                let echoRestoredAfterwards = (after.c_lflag & tcflag_t(ECHO)) != 0
-                return (echoEnabledInitially, readValue, echoRestoredAfterwards)
+            let bytesWritten = secretPayload.withCString {
+                write(master, $0, secretPayload.utf8.count)
+            }
+            reporter.check("PTY secret fixture is written completely", bytesWritten == secretPayload.utf8.count)
+            let result: (Bool, String?, Bool)?
+            do {
+                result = try SelfTestSupport.withStandardInput(from: slave) {
+                    var before = termios()
+                    let readBefore = tcgetattr(STDIN_FILENO, &before) == 0
+                    let echoEnabledInitially = readBefore && (before.c_lflag & tcflag_t(ECHO)) != 0
+                    let readValue = SecretInput.readSecret(prompt: nil)
+                    var after = termios()
+                    let readAfter = tcgetattr(STDIN_FILENO, &after) == 0
+                    let echoRestoredAfterwards = readAfter && (after.c_lflag & tcflag_t(ECHO)) != 0
+                    return (echoEnabledInitially, readValue, echoRestoredAfterwards)
+                }
+            } catch {
+                result = nil
+                reporter.check("PTY stdin redirection infrastructure succeeds", false, detail: "\(error)")
             }
             close(slave)
 
@@ -502,10 +524,19 @@ enum SecuritySelfTests {
         var pipeFds: [Int32] = [0, 0]
         if pipe(&pipeFds) == 0 {
             let testInput = "noninteractive_secret_123\n"
-            write(pipeFds[1], testInput, testInput.utf8.count)
+            let bytesWritten = testInput.withCString {
+                write(pipeFds[1], $0, testInput.utf8.count)
+            }
+            reporter.check("pipe secret fixture is written completely", bytesWritten == testInput.utf8.count)
             close(pipeFds[1])
-            let pipeRead = SelfTestSupport.withStandardInput(from: pipeFds[0]) {
-                SecretInput.readSecret(prompt: nil)
+            let pipeRead: String?
+            do {
+                pipeRead = try SelfTestSupport.withStandardInput(from: pipeFds[0]) {
+                    SecretInput.readSecret(prompt: nil)
+                }
+            } catch {
+                pipeRead = nil
+                reporter.check("pipe stdin redirection infrastructure succeeds", false, detail: "\(error)")
             }
             close(pipeFds[0])
 
@@ -513,6 +544,24 @@ enum SecuritySelfTests {
         } else {
             reporter.check("pipe available for non-interactive input testing", passed: false)
         }
+
+        // A redirection failure must throw, skip the body, restore stdin, and close its saved copy.
+        let descriptorsBeforeFailure = SelfTestSupport.openFileDescriptorCount()
+        var invalidRedirectionThrew = false
+        var invalidBodyRan = false
+        do {
+            _ = try SelfTestSupport.withStandardInput(from: -1) {
+                invalidBodyRan = true
+            }
+        } catch {
+            invalidRedirectionThrew = true
+        }
+        let descriptorsAfterFailure = SelfTestSupport.openFileDescriptorCount()
+        reporter.check(
+            "stdin redirection failure is observable and leak-free",
+            invalidRedirectionThrew && !invalidBodyRan && descriptorsAfterFailure == descriptorsBeforeFailure,
+            detail: "before=\(descriptorsBeforeFailure), after=\(descriptorsAfterFailure)"
+        )
 
         // 4. CLI Argument check: verify rejection of secret argument flags
         let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--api-key"]

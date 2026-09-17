@@ -108,6 +108,15 @@ enum PersistenceSelfTests {
     private static func runNotionSetupCases() -> Int {
         let reporter = SelfTestReporter()
 
+        func capture(_ block: () -> Void) -> (stdout: String, stderr: String)? {
+            do {
+                return try SelfTestSupport.captureOutput(block: block)
+            } catch {
+                reporter.check("standard-stream capture infrastructure succeeds", false, detail: "\(error)")
+                return nil
+            }
+        }
+
         let sentinelToken = "SENTINEL_NOTION_SECRET_987654321"
         let sentinelDbID = "test_database_id_abc"
 
@@ -127,7 +136,7 @@ enum PersistenceSelfTests {
 
             Keychain.withBackend(mockFailingKeychain) {
                 var exitCode: Int32 = -1
-                let output = SelfTestSupport.captureOutput {
+                let output = capture {
                     exitCode = NotionSetup.execute(
                         secretReader: { _ in sentinelToken },
                         databaseIDReader: { sentinelDbID }
@@ -136,17 +145,17 @@ enum PersistenceSelfTests {
 
                 reporter.check("NotionSetup returns exit code 1 on Keychain failure", passed: exitCode == 1)
                 reporter.check("Database ID is NOT persisted on Keychain failure", passed: Preferences.notionDatabaseID == nil)
-                reporter.check("Sentinel token absent from stdout on Keychain failure", passed: !output.stdout.contains(sentinelToken))
-                reporter.check("Sentinel token absent from stderr on Keychain failure", passed: !output.stderr.contains(sentinelToken))
-                reporter.check("Error message reported to stderr on failure", passed: output.stderr.contains("error: failed to store token in Keychain"))
-                reporter.check("Success message NOT printed on failure", passed: !output.stdout.contains("Saved. Completed routines will now log to Notion."))
+                reporter.check("Sentinel token absent from stdout on Keychain failure", passed: output?.stdout.contains(sentinelToken) == false)
+                reporter.check("Sentinel token absent from stderr on Keychain failure", passed: output?.stderr.contains(sentinelToken) == false)
+                reporter.check("Error message reported to stderr on failure", passed: output?.stderr.contains("error: failed to store token in Keychain") == true)
+                reporter.check("Success message NOT printed on failure", passed: output?.stdout.contains("Saved. Completed routines will now log to Notion.") == false)
             }
 
             // Case 2: Empty token fails early without touching Keychain
             let mockKeychainUnused = MockKeychainBackend()
             Keychain.withBackend(mockKeychainUnused) {
                 var exitCode: Int32 = -1
-                let output = SelfTestSupport.captureOutput {
+                let output = capture {
                     exitCode = NotionSetup.execute(
                         secretReader: { _ in "   \n" },
                         databaseIDReader: { sentinelDbID }
@@ -154,7 +163,7 @@ enum PersistenceSelfTests {
                 }
 
                 reporter.check("NotionSetup fails on empty token", passed: exitCode == 1)
-                reporter.check("Empty token error reported to stderr", passed: output.stderr.contains("error: no token entered"))
+                reporter.check("Empty token error reported to stderr", passed: output?.stderr.contains("error: no token entered") == true)
                 reporter.check("Keychain untouched on empty token", passed: mockKeychainUnused.storage.isEmpty)
                 reporter.check("Database ID not set on empty token", passed: Preferences.notionDatabaseID == nil)
             }
@@ -162,7 +171,7 @@ enum PersistenceSelfTests {
             // Case 3: Empty database ID fails without persisting
             Keychain.withBackend(mockKeychainUnused) {
                 var exitCode: Int32 = -1
-                let output = SelfTestSupport.captureOutput {
+                let output = capture {
                     exitCode = NotionSetup.execute(
                         secretReader: { _ in sentinelToken },
                         databaseIDReader: { "   " }
@@ -170,7 +179,7 @@ enum PersistenceSelfTests {
                 }
 
                 reporter.check("NotionSetup fails on empty database ID", passed: exitCode == 1)
-                reporter.check("Empty database ID error reported to stderr", passed: output.stderr.contains("error: no database ID entered"))
+                reporter.check("Empty database ID error reported to stderr", passed: output?.stderr.contains("error: no database ID entered") == true)
                 reporter.check("Database ID not set on empty database ID", passed: Preferences.notionDatabaseID == nil)
             }
 
@@ -178,7 +187,7 @@ enum PersistenceSelfTests {
             let mockSuccessKeychain = MockKeychainBackend()
             Keychain.withBackend(mockSuccessKeychain) {
                 var exitCode: Int32 = -1
-                let output = SelfTestSupport.captureOutput {
+                let output = capture {
                     exitCode = NotionSetup.execute(
                         secretReader: { _ in sentinelToken },
                         databaseIDReader: { sentinelDbID }
@@ -188,9 +197,9 @@ enum PersistenceSelfTests {
                 reporter.check("NotionSetup succeeds with valid inputs", passed: exitCode == 0)
                 reporter.check("Database ID persisted on success", passed: Preferences.notionDatabaseID == sentinelDbID)
                 reporter.check("Sentinel token stored in Keychain", passed: (try? Keychain.get(forAccount: NotionClient.tokenAccount)) == sentinelToken)
-                reporter.check("Sentinel token absent from stdout on success", passed: !output.stdout.contains(sentinelToken))
-                reporter.check("Sentinel token absent from stderr on success", passed: !output.stderr.contains(sentinelToken))
-                reporter.check("Success message printed on completion", passed: output.stdout.contains("Saved. Completed routines will now log to Notion."))
+                reporter.check("Sentinel token absent from stdout on success", passed: output?.stdout.contains(sentinelToken) == false)
+                reporter.check("Sentinel token absent from stderr on success", passed: output?.stderr.contains(sentinelToken) == false)
+                reporter.check("Success message printed on completion", passed: output?.stdout.contains("Saved. Completed routines will now log to Notion.") == true)
             }
         }
 
@@ -203,7 +212,6 @@ enum PersistenceSelfTests {
         let reporter = SelfTestReporter()
 
         let tempSupportFixture = SelfTestTemporaryDirectory(prefix: "movebreak-perm")
-        defer { tempSupportFixture.cleanup() }
         let tempSupportDir = tempSupportFixture.url
 
         let logger = SessionLogger(supportDir: tempSupportDir)
@@ -255,14 +263,23 @@ enum PersistenceSelfTests {
 
         // 6. Startup tightening of loose permissions (0777 dir -> 0700, 0666/0644 files -> 0600)
         let looseFixture = SelfTestTemporaryDirectory(prefix: "movebreak-loose")
-        defer { looseFixture.cleanup() }
         let looseDir = looseFixture.url
-        try? looseFixture.create(permissions: 0o777)
+        do {
+            try looseFixture.create(permissions: 0o777)
+        } catch {
+            reporter.check("loose-permission fixture directory is created", false, detail: "\(error)")
+        }
 
         let looseLog = looseDir.appendingPathComponent("sessions.jsonl")
         let loosePending = looseDir.appendingPathComponent("pending-sync.json")
-        FileManager.default.createFile(atPath: looseLog.path, contents: Data("line\n".utf8), attributes: [.posixPermissions: 0o666])
-        FileManager.default.createFile(atPath: loosePending.path, contents: Data("[]".utf8), attributes: [.posixPermissions: 0o644])
+        reporter.check(
+            "loose sessions fixture is created",
+            FileManager.default.createFile(atPath: looseLog.path, contents: Data("line\n".utf8), attributes: [.posixPermissions: 0o666])
+        )
+        reporter.check(
+            "loose pending fixture is created",
+            FileManager.default.createFile(atPath: loosePending.path, contents: Data("[]".utf8), attributes: [.posixPermissions: 0o644])
+        )
 
         _ = SessionLogger(supportDir: looseDir)
 
@@ -274,6 +291,15 @@ enum PersistenceSelfTests {
         reporter.check("Startup tightens sessions.jsonl to 0600", passed: tightenedLogMode == 0o600, detail: "got \(String(format: "%o", tightenedLogMode ?? 0))")
         reporter.check("Startup tightens pending-sync.json to 0600", passed: tightenedPendingMode == 0o600, detail: "got \(String(format: "%o", tightenedPendingMode ?? 0))")
 
+        for (name, fixture) in [("loose-permission", looseFixture), ("session logger", tempSupportFixture)] {
+            do {
+                try fixture.cleanup()
+                reporter.check("\(name) temporary directory is removed", true)
+            } catch {
+                reporter.check("\(name) temporary directory is removed", false, detail: "\(error)")
+            }
+        }
+
         return reporter.failureCount
     }
 
@@ -283,9 +309,13 @@ enum PersistenceSelfTests {
         let reporter = SelfTestReporter()
 
         let testFixture = SelfTestTemporaryDirectory(prefix: "movebreak-ro")
-        defer { testFixture.cleanup() }
         let testDir = testFixture.url
-        try? testFixture.create(permissions: 0o700)
+        do {
+            try testFixture.create(permissions: 0o700)
+        } catch {
+            reporter.check("read-only persistence fixture is created", false, detail: "\(error)")
+            return reporter.failureCount
+        }
 
         let loggerQueue = DispatchQueue(label: "com.mike.movebreak.tests.persistence-failure")
         let testLogger = SessionLogger(supportDir: testDir, queue: loggerQueue)
@@ -293,7 +323,7 @@ enum PersistenceSelfTests {
         let sampleRecord = SessionRecord(routine: sampleRoutine, checkedIDs: [ExerciseCatalog.all[0].id])
 
         // Revoke write permissions on the directory
-        _ = chmod(testDir.path, 0o500) // r-x------
+        reporter.check("persistence fixture permissions become read-only", chmod(testDir.path, 0o500) == 0)
 
         var appendThrew = false
         do {
@@ -373,7 +403,13 @@ enum PersistenceSelfTests {
             detail: "expected one failure result"
         )
 
-        _ = chmod(testDir.path, 0o700)
+        reporter.check("persistence fixture permissions are restored", chmod(testDir.path, 0o700) == 0)
+        do {
+            try testFixture.cleanup()
+            reporter.check("read-only persistence fixture is removed", true)
+        } catch {
+            reporter.check("read-only persistence fixture is removed", false, detail: "\(error)")
+        }
         return reporter.failureCount
     }
 
