@@ -41,6 +41,9 @@ swiftc -O \
     -o build/MoveBreak \
     Sources/MoveBreak/*.swift
 
+echo "==> Checking documentation links and CLI coverage"
+./scripts/check_documentation.sh ./build/MoveBreak
+
 echo "==> Running self-test"
 ./build/MoveBreak --self-test > /dev/null || {
     echo "self-test FAILED — run ./build/MoveBreak --self-test to see which cases" >&2

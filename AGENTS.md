@@ -24,8 +24,9 @@ future-state sequencing in `ROADMAP.md`.
 
 - Compiles `Sources/MoveBreak/*.swift` directly with `swiftc`; there is no Xcode project,
   SwiftPM manifest, or external dependency. CommandLineTools is sufficient.
-- Runs the agent-context and architecture-inventory checks, compiles the app, runs the
-  complete `./build/MoveBreak --self-test` suite, packages `MoveBreak.app`, and ad-hoc signs it.
+- Runs the agent-context and architecture-inventory checks, compiles the app, verifies local
+  documentation links and README CLI coverage, runs the complete `./build/MoveBreak --self-test`
+  suite, packages `MoveBreak.app`, and ad-hoc signs it.
 
 To run self-test directly:
 ```bash
