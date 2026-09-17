@@ -15,7 +15,7 @@ enum NotionClient {
         _ record: SessionRecord,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        guard let token = Keychain.get(forAccount: tokenAccount),
+        guard let token = try? Keychain.get(forAccount: tokenAccount),
               let databaseID = Preferences.notionDatabaseID else {
             completion(.failure(ClientError.missingCredentials))
             return

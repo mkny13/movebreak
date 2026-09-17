@@ -1,7 +1,14 @@
 import AppKit
 import Foundation
 
-let arguments = Set(CommandLine.arguments.dropFirst())
+let rawArguments = CommandLine.arguments.dropFirst()
+for arg in rawArguments {
+    if arg.hasPrefix("--token") || arg.hasPrefix("--secret") || arg.hasPrefix("--notion-token") || arg.hasPrefix("--api-key") {
+        FileHandle.standardError.write(Data("error: secrets must not be provided via command-line arguments. Use --configure-notion for secure interactive setup.\n".utf8))
+        exit(1)
+    }
+}
+let arguments = Set(rawArguments)
 
 if arguments.contains("--help") || arguments.contains("-h") {
     print("""
