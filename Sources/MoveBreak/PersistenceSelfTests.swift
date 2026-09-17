@@ -363,6 +363,22 @@ enum PersistenceSelfTests {
             detail: "before=\(descriptorsBeforeFailure), after=\(descriptorsAfterFailure)"
         )
 
+        let descriptorsBeforeBodyFailure = SelfTestSupport.openFileDescriptorCount()
+        var captureBodyFailureObserved = false
+        do {
+            _ = try SelfTestSupport.captureOutput {
+                throw NSError(domain: "SelfTestExpectedCaptureBodyFailure", code: 1)
+            }
+        } catch {
+            captureBodyFailureObserved = true
+        }
+        let descriptorsAfterBodyFailure = SelfTestSupport.openFileDescriptorCount()
+        reporter.check(
+            "output-capture body failure restores streams and descriptor baseline",
+            captureBodyFailureObserved && descriptorsAfterBodyFailure == descriptorsBeforeBodyFailure,
+            detail: "before=\(descriptorsBeforeBodyFailure), after=\(descriptorsAfterBodyFailure)"
+        )
+
         let descriptorsBeforeCaptures = SelfTestSupport.openFileDescriptorCount()
         var repeatedCapturesPassed = true
         for index in 0..<20 {

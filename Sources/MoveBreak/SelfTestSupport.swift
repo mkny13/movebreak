@@ -106,7 +106,7 @@ final class SelfTestReporter {
 }
 
 enum SelfTestSupport {
-    static func withStandardInput<T>(from descriptor: Int32, perform: () -> T) throws -> T {
+    static func withStandardInput<T>(from descriptor: Int32, perform: () throws -> T) throws -> T {
         let savedInput = dup(STDIN_FILENO)
         guard savedInput >= 0 else {
             throw SelfTestInfrastructureError.posix(operation: "duplicate stdin", code: errno)
@@ -116,19 +116,24 @@ enum SelfTestSupport {
             close(savedInput)
             throw SelfTestInfrastructureError.posix(operation: "redirect stdin", code: code)
         }
-        let result = perform()
+        let result: Result<T, Error>
+        do {
+            result = .success(try perform())
+        } catch {
+            result = .failure(error)
+        }
         guard dup2(savedInput, STDIN_FILENO) >= 0 else {
             let code = errno
             close(savedInput)
             throw SelfTestInfrastructureError.posix(operation: "restore stdin", code: code)
         }
         close(savedInput)
-        return result
+        return try result.get()
     }
 
     static func captureOutput(
         pipeFactory: (UnsafeMutablePointer<Int32>) -> Int32 = { Darwin.pipe($0) },
-        block: () -> Void
+        block: () throws -> Void
     ) throws -> (stdout: String, stderr: String) {
         var outPipe: [Int32] = [-1, -1]
         var errPipe: [Int32] = [-1, -1]
@@ -181,7 +186,13 @@ enum SelfTestSupport {
         close(outPipe[1])
         close(errPipe[1])
 
-        block()
+        let blockError: Error?
+        do {
+            try block()
+            blockError = nil
+        } catch {
+            blockError = error
+        }
         fflush(stdout)
         fflush(stderr)
 
@@ -200,6 +211,11 @@ enum SelfTestSupport {
             close(outPipe[0])
             close(errPipe[0])
             throw SelfTestInfrastructureError.posix(operation: "restore stderr", code: restoreErrError)
+        }
+        if let blockError {
+            close(outPipe[0])
+            close(errPipe[0])
+            throw blockError
         }
 
         func readPipe(_ descriptor: Int32, stream: String) throws -> String {

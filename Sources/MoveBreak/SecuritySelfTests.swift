@@ -563,6 +563,29 @@ enum SecuritySelfTests {
             detail: "before=\(descriptorsBeforeFailure), after=\(descriptorsAfterFailure)"
         )
 
+        let descriptorsBeforeBodyFailure = SelfTestSupport.openFileDescriptorCount()
+        var throwingPipe: [Int32] = [-1, -1]
+        if pipe(&throwingPipe) == 0 {
+            close(throwingPipe[1])
+            var bodyFailureObserved = false
+            do {
+                _ = try SelfTestSupport.withStandardInput(from: throwingPipe[0]) {
+                    throw NSError(domain: "SelfTestExpectedInputBodyFailure", code: 1)
+                }
+            } catch {
+                bodyFailureObserved = true
+            }
+            close(throwingPipe[0])
+            let descriptorsAfterBodyFailure = SelfTestSupport.openFileDescriptorCount()
+            reporter.check(
+                "stdin body failure restores input and descriptor baseline",
+                bodyFailureObserved && descriptorsAfterBodyFailure == descriptorsBeforeBodyFailure,
+                detail: "before=\(descriptorsBeforeBodyFailure), after=\(descriptorsAfterBodyFailure)"
+            )
+        } else {
+            reporter.check("pipe available for stdin body-failure testing", false)
+        }
+
         // 4. CLI Argument check: verify rejection of secret argument flags
         let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--api-key"]
         for flag in forbiddenFlags {
