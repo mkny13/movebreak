@@ -28,7 +28,7 @@ final class SessionLogger {
     static let directoryPermissions: NSNumber = 0o700
     static let filePermissions: NSNumber = 0o600
 
-    private let queue = DispatchQueue(label: "com.mike.MoveBreak.sessionLogger")
+    private let queue: DispatchQueue
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -37,8 +37,13 @@ final class SessionLogger {
     let pendingFile: URL
     private let fileManager: FileManager
 
-    init(supportDir: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        supportDir: URL? = nil,
+        fileManager: FileManager = .default,
+        queue: DispatchQueue = DispatchQueue(label: "com.mike.MoveBreak.sessionLogger")
+    ) {
         self.fileManager = fileManager
+        self.queue = queue
         let dir: URL
         if let supportDir = supportDir {
             dir = supportDir

@@ -287,7 +287,8 @@ enum PersistenceSelfTests {
         let testDir = testFixture.url
         try? testFixture.create(permissions: 0o700)
 
-        let testLogger = SessionLogger(supportDir: testDir)
+        let loggerQueue = DispatchQueue(label: "com.mike.movebreak.tests.persistence-failure")
+        let testLogger = SessionLogger(supportDir: testDir, queue: loggerQueue)
         let sampleRoutine = Routine(key: "pt", title: "PT", subtitle: "Desk PT", estimatedMinutes: 2, exercises: [ExerciseCatalog.all[0]])
         let sampleRecord = SessionRecord(routine: sampleRoutine, checkedIDs: [ExerciseCatalog.all[0].id])
 
@@ -310,20 +311,67 @@ enum PersistenceSelfTests {
         }
         reporter.check("writePending throws SessionLoggerError on read-only directory", passed: pendingThrew)
 
-        let sema = DispatchSemaphore(value: 0)
-        var callbackResult: Result<SessionRecord, Error>? = nil
+        let callbackLock = NSLock()
+        var callbackResults: [Result<SessionRecord, Error>] = []
+        var operationDrained = false
+        var lateCallbackCount = 0
         testLogger.logCompletion(record: sampleRecord) { result in
-            callbackResult = result
-            sema.signal()
+            callbackLock.withLock {
+                if operationDrained { lateCallbackCount += 1 }
+                callbackResults.append(result)
+            }
         }
-        _ = sema.wait(timeout: .now() + 2.0)
 
-        var failedSafely = false
-        if case .failure = callbackResult {
-            failedSafely = true
+        let operationBarrier = DispatchSemaphore(value: 0)
+        loggerQueue.async {
+            callbackLock.withLock { operationDrained = true }
+            operationBarrier.signal()
         }
-        reporter.check("logCompletion reports failure callback on persistence error", passed: failedSafely)
-        reporter.check("logCompletion never reports success on persistence error", passed: callbackResult != nil && failedSafely)
+        let operationDrainResult = operationBarrier.wait(timeout: .now() + 5)
+        reporter.check(
+            "logCompletion persistence operation drains",
+            passed: operationDrainResult == .success,
+            detail: "logger queue barrier timed out"
+        )
+
+        // A second barrier catches a callback that the operation queued behind the first
+        // barrier, allowing late delivery to be distinguished from missing delivery.
+        let callbackBarrier = DispatchSemaphore(value: 0)
+        loggerQueue.async { callbackBarrier.signal() }
+        let callbackDrainResult = callbackBarrier.wait(timeout: .now() + 5)
+        reporter.check(
+            "logCompletion callback work drains",
+            passed: callbackDrainResult == .success,
+            detail: "logger callback barrier timed out"
+        )
+
+        let callbackSnapshot = callbackLock.withLock {
+            (results: callbackResults, lateCount: lateCallbackCount)
+        }
+        reporter.check(
+            "logCompletion reports a callback before the operation drains",
+            passed: !callbackSnapshot.results.isEmpty && callbackSnapshot.lateCount == 0,
+            detail: callbackSnapshot.results.isEmpty
+                ? "callback was missing"
+                : "\(callbackSnapshot.lateCount) callback(s) arrived late"
+        )
+        reporter.check(
+            "logCompletion reports exactly one callback",
+            passed: callbackSnapshot.results.count == 1,
+            detail: "observed \(callbackSnapshot.results.count) callbacks"
+        )
+        let callbackFailed: Bool
+        if callbackSnapshot.results.count == 1,
+           case .failure = callbackSnapshot.results[0] {
+            callbackFailed = true
+        } else {
+            callbackFailed = false
+        }
+        reporter.check(
+            "logCompletion reports failure rather than success on persistence error",
+            passed: callbackFailed,
+            detail: "expected one failure result"
+        )
 
         _ = chmod(testDir.path, 0o700)
         return reporter.failureCount
