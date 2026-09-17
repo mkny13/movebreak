@@ -140,6 +140,8 @@ without requiring browser automation or network access.
 
 ## Module inventory
 
+<!-- architecture-module-inventory:start -->
+
 Each tracked Swift source appears exactly once below.
 
 ### Startup and orchestration
@@ -207,3 +209,5 @@ Each tracked Swift source appears exactly once below.
 | [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests records, routine persistence, local history, permissions, and pending queues. |
 | [`SecuritySelfTests.swift`](Sources/MoveBreak/SecuritySelfTests.swift) | Tests secret input, Keychain behavior, credential boundaries, and URL redaction. |
 | [`UpdateSelfTests.swift`](Sources/MoveBreak/UpdateSelfTests.swift) | Tests release, archive, bundle, staging, signer, and subprocess update boundaries. |
+
+<!-- architecture-module-inventory:end -->
