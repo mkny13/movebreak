@@ -71,7 +71,6 @@ enum UpdateSelfTests {
         )
 
         let processFixture = SelfTestTemporaryDirectory(prefix: "movebreak-process-runner")
-        defer { processFixture.cleanup() }
         let fixtureDir = processFixture.url
         let ignoresTermURL = fixtureDir.appendingPathComponent("ignores-term.sh")
         do {
@@ -80,10 +79,16 @@ enum UpdateSelfTests {
             try Data(script.utf8).write(to: ignoresTermURL)
             guard chmod(ignoresTermURL.path, 0o700) == 0 else {
                 reporter.check("termination-resistant helper fixture is executable", false)
+                do { try processFixture.cleanup() } catch {
+                    reporter.check("process runner fixture cleanup after setup failure", false, detail: "\(error)")
+                }
                 return reporter.failureCount
             }
         } catch {
             reporter.check("termination-resistant helper fixture is created", false, detail: "\(error)")
+            do { try processFixture.cleanup() } catch {
+                reporter.check("process runner fixture cleanup after setup failure", false, detail: "\(error)")
+            }
             return reporter.failureCount
         }
 
@@ -122,6 +127,13 @@ enum UpdateSelfTests {
               repeatsPassed && descriptorsAfter == descriptorsBefore,
               detail: "before=\(descriptorsBefore), after=\(descriptorsAfter)")
 
+        do {
+            try processFixture.cleanup()
+            reporter.check("process runner temporary fixture is removed", true)
+        } catch {
+            reporter.check("process runner temporary fixture is removed", false, detail: "\(error)")
+        }
+
         return reporter.failureCount
     }
 
@@ -129,6 +141,16 @@ enum UpdateSelfTests {
 
     private static func runUpdateTrustCases() -> Int {
         let reporter = SelfTestReporter()
+
+        func fixtureStep(_ name: String, _ operation: () throws -> Void) -> Bool {
+            do {
+                try operation()
+                return true
+            } catch {
+                reporter.check(name, false, detail: "\(error)")
+                return false
+            }
+        }
 
         // 1. Release Tag Validation
         let validTags = ["v1.1", "v1.2.0", "v2.0", "v10.12.3", "v0.1"]
@@ -291,13 +313,21 @@ enum UpdateSelfTests {
 
         // 5. Archive SHA-256 Digest Verification & Tampering
         let updateFixture = SelfTestTemporaryDirectory(prefix: "movebreak-update-test")
-        defer { updateFixture.cleanup() }
         let tempFixtureDir = updateFixture.url
-        try? updateFixture.create()
+        do {
+            try updateFixture.create()
+        } catch {
+            reporter.check("update fixture directory is created", false, detail: "\(error)")
+            return reporter.failureCount
+        }
 
         let sampleArchiveURL = tempFixtureDir.appendingPathComponent("test.zip")
         let testPayload = Data("MoveBreakSecurePayloadData123456789".utf8)
-        try? testPayload.write(to: sampleArchiveURL)
+        do {
+            try testPayload.write(to: sampleArchiveURL)
+        } catch {
+            reporter.check("sample update archive is written", false, detail: "\(error)")
+        }
 
         if let computedHex = try? ArchiveDigestValidation.computeSHA256(at: sampleArchiveURL) {
             var verifyPassed = false
@@ -332,9 +362,14 @@ enum UpdateSelfTests {
         // 7. Staging Containment & Symlink Defense
         let appBundleDir = stagingDir.appendingPathComponent("MoveBreak.app", isDirectory: true)
         let macosDir = appBundleDir.appendingPathComponent("Contents/MacOS", isDirectory: true)
-        try? FileManager.default.createDirectory(at: macosDir, withIntermediateDirectories: true)
+        _ = fixtureStep("sample app executable directory is created") {
+            try FileManager.default.createDirectory(at: macosDir, withIntermediateDirectories: true)
+        }
         let execURL = macosDir.appendingPathComponent("MoveBreak")
-        FileManager.default.createFile(atPath: execURL.path, contents: Data([0xCF, 0xFA, 0xED, 0xFE]), attributes: [.posixPermissions: 0o755])
+        reporter.check(
+            "sample app executable is created",
+            FileManager.default.createFile(atPath: execURL.path, contents: Data([0xCF, 0xFA, 0xED, 0xFE]), attributes: [.posixPermissions: 0o755])
+        )
 
         var validContainment = false
         do {
@@ -344,7 +379,9 @@ enum UpdateSelfTests {
         reporter.check("valid app bundle inside staging directory passes containment", passed: validContainment)
 
         let symlinkAppURL = stagingDir.appendingPathComponent("SymlinkEscape.app")
-        try? FileManager.default.createSymbolicLink(at: symlinkAppURL, withDestinationURL: URL(fileURLWithPath: "/Applications"))
+        _ = fixtureStep("escaping app symlink fixture is created") {
+            try FileManager.default.createSymbolicLink(at: symlinkAppURL, withDestinationURL: URL(fileURLWithPath: "/Applications"))
+        }
         var symlinkAppThrew = false
         do {
             try StagingPathValidation.validateContainment(appURL: symlinkAppURL, stagingDir: stagingDir)
@@ -355,8 +392,12 @@ enum UpdateSelfTests {
 
         let escapeSymlink = appBundleDir.appendingPathComponent("Contents/Resources/escape_link")
         let resourcesDir = appBundleDir.appendingPathComponent("Contents/Resources", isDirectory: true)
-        try? FileManager.default.createDirectory(at: resourcesDir, withIntermediateDirectories: true)
-        try? FileManager.default.createSymbolicLink(at: escapeSymlink, withDestinationURL: URL(fileURLWithPath: "/etc"))
+        _ = fixtureStep("sample app resources directory is created") {
+            try FileManager.default.createDirectory(at: resourcesDir, withIntermediateDirectories: true)
+        }
+        _ = fixtureStep("internal escaping symlink fixture is created") {
+            try FileManager.default.createSymbolicLink(at: escapeSymlink, withDestinationURL: URL(fileURLWithPath: "/etc"))
+        }
         var internalSymlinkThrew = false
         do {
             try StagingPathValidation.validateContainment(appURL: appBundleDir, stagingDir: stagingDir)
@@ -364,15 +405,22 @@ enum UpdateSelfTests {
             if case .internalSymlinkEscapes = err { internalSymlinkThrew = true }
         } catch {}
         reporter.check("bundle with internal symlink escaping staging directory rejected", passed: internalSymlinkThrew)
-        try? FileManager.default.removeItem(at: escapeSymlink)
+        _ = fixtureStep("internal escaping symlink fixture is removed") {
+            try FileManager.default.removeItem(at: escapeSymlink)
+        }
 
         let outsideAppURL = tempFixtureDir.appendingPathComponent("Outside.app", isDirectory: true)
         let outsideMacOSURL = outsideAppURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
-        try? FileManager.default.createDirectory(at: outsideMacOSURL, withIntermediateDirectories: true)
-        _ = FileManager.default.createFile(
-            atPath: outsideMacOSURL.appendingPathComponent("MoveBreak").path,
-            contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
-            attributes: [.posixPermissions: 0o755]
+        _ = fixtureStep("outside app executable directory is created") {
+            try FileManager.default.createDirectory(at: outsideMacOSURL, withIntermediateDirectories: true)
+        }
+        reporter.check(
+            "outside app executable is created",
+            FileManager.default.createFile(
+                atPath: outsideMacOSURL.appendingPathComponent("MoveBreak").path,
+                contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
+                attributes: [.posixPermissions: 0o755]
+            )
         )
         var outsideAppThrew = false
         do {
@@ -382,7 +430,9 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("app bundle outside staging directory rejected", passed: outsideAppThrew)
 
-        try? FileManager.default.removeItem(at: execURL)
+        _ = fixtureStep("sample executable is removed for missing-file case") {
+            try FileManager.default.removeItem(at: execURL)
+        }
         var missingExecutableThrew = false
         do {
             try StagingPathValidation.validateContainment(appURL: appBundleDir, stagingDir: stagingDir)
@@ -390,25 +440,30 @@ enum UpdateSelfTests {
             if case .invalidAppStructure = error { missingExecutableThrew = true }
         } catch {}
         reporter.check("bundle with missing executable rejected as invalid structure", passed: missingExecutableThrew)
-        _ = FileManager.default.createFile(
-            atPath: execURL.path,
-            contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
-            attributes: [.posixPermissions: 0o755]
+        reporter.check(
+            "sample executable is recreated",
+            FileManager.default.createFile(
+                atPath: execURL.path,
+                contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
+                attributes: [.posixPermissions: 0o755]
+            )
         )
 
         // 8. Bundle Metadata & Version Verification
         let plistURL = appBundleDir.appendingPathComponent("Contents/Info.plist")
-        func writePlist(bundleID: String, executable: String, version: String) {
+        func writePlist(bundleID: String, executable: String, version: String) throws {
             let dict: [String: Any] = [
                 "CFBundleIdentifier": bundleID,
                 "CFBundleExecutable": executable,
                 "CFBundleShortVersionString": version
             ]
-            let data = try! PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
-            try! data.write(to: plistURL)
+            let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+            try data.write(to: plistURL)
         }
 
-        writePlist(bundleID: "com.mike.movebreak", executable: "MoveBreak", version: "1.2.0")
+        _ = fixtureStep("valid bundle plist fixture is written") {
+            try writePlist(bundleID: "com.mike.movebreak", executable: "MoveBreak", version: "1.2.0")
+        }
         var metadataValid = false
         do {
             try BundleMetadataValidation.validateBundleMetadata(
@@ -421,7 +476,9 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("matching bundle metadata (identifier, executable, version) passes", passed: metadataValid)
 
-        try? Data("not a property list".utf8).write(to: plistURL)
+        _ = fixtureStep("malformed bundle plist fixture is written") {
+            try Data("not a property list".utf8).write(to: plistURL)
+        }
         var malformedPlistThrew = false
         do {
             try BundleMetadataValidation.validateBundleMetadata(
@@ -435,7 +492,9 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("malformed bundle Info.plist rejected", passed: malformedPlistThrew)
 
-        writePlist(bundleID: "com.attacker.fakeapp", executable: "MoveBreak", version: "1.2.0")
+        _ = fixtureStep("bundle identifier mismatch fixture is written") {
+            try writePlist(bundleID: "com.attacker.fakeapp", executable: "MoveBreak", version: "1.2.0")
+        }
         var bundleIDMismatchThrew = false
         do {
             try BundleMetadataValidation.validateBundleMetadata(
@@ -449,7 +508,9 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("mismatched bundle identifier rejected", passed: bundleIDMismatchThrew)
 
-        writePlist(bundleID: "com.mike.movebreak", executable: "WrongExecutable", version: "1.2.0")
+        _ = fixtureStep("bundle executable mismatch fixture is written") {
+            try writePlist(bundleID: "com.mike.movebreak", executable: "WrongExecutable", version: "1.2.0")
+        }
         var executableMismatchThrew = false
         do {
             try BundleMetadataValidation.validateBundleMetadata(
@@ -463,7 +524,9 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("mismatched executable name rejected", passed: executableMismatchThrew)
 
-        writePlist(bundleID: "com.mike.movebreak", executable: "MoveBreak", version: "1.1.0")
+        _ = fixtureStep("bundle version mismatch fixture is written") {
+            try writePlist(bundleID: "com.mike.movebreak", executable: "MoveBreak", version: "1.1.0")
+        }
         var versionMismatchThrew = false
         do {
             try BundleMetadataValidation.validateBundleMetadata(
@@ -592,6 +655,13 @@ enum UpdateSelfTests {
                 strictVerifyPassed = true
             } catch {}
             reporter.check("strict code signature verification succeeds on un-tampered bundle", passed: strictVerifyPassed)
+        }
+
+        do {
+            try updateFixture.cleanup()
+            reporter.check("update trust temporary fixture is removed", true)
+        } catch {
+            reporter.check("update trust temporary fixture is removed", false, detail: "\(error)")
         }
 
         return reporter.failureCount
