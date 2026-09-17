@@ -23,6 +23,9 @@ IDENTITY="${1:--}"
 APP="MoveBreak.app"
 DEPLOY_TARGET="arm64-apple-macosx14.4"
 
+echo "==> Checking architecture documentation"
+./scripts/check_architecture_docs.sh
+
 echo "==> Compiling"
 mkdir -p build
 swiftc -O \
