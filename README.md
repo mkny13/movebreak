@@ -349,3 +349,16 @@ Sources/MoveBreak/
 
 Full Xcode is **not** needed — `swiftc` and the SwiftUI/AppKit SDKs in CommandLineTools are
 sufficient, and installing Xcode would only restore SwiftPM, which this project doesn't use.
+
+---
+
+## Integration with Groundwork
+
+MoveBreak is being integrated with [Groundwork](https://github.com/mkny13/groundwork) (rehabilitation and athletic training engine):
+- **Desktop HUD & detection:** MoveBreak retains its low-overhead native macOS CoreAudio meeting/video detection and floating overlay HUD (`FloatingPanel`) over Zoom.
+- **Clinical intelligence & persistence:** MoveBreak replaces its static catalog (`ExerciseCatalog.swift`) and legacy Notion client (`NotionClient.swift`) with Groundwork's dynamic desk-break session generation and Neon Postgres tracking.
+- Tracked in [movebreak#2](https://github.com/mkny13/movebreak/issues/2).
+
+## Automation & Agent Workflows
+
+This repo is managed by [Mahler](https://github.com/mkny13/mahler). See [AGENTS.md](AGENTS.md) for build, verification, and autonomous agent conventions.
