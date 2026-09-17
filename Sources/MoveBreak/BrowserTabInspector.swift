@@ -59,12 +59,6 @@ final class BrowserTabInspector {
         return fresh
     }
 
-    func invalidateCache() {
-        lock.lock()
-        cache.removeAll(keepingCapacity: true)
-        lock.unlock()
-    }
-
     /// Bypasses the cache. Used by `--tabs` so repeated runs show current state.
     func inspectFresh(bundleID: String) -> TabInspection {
         performInspection(bundleID: bundleID)
