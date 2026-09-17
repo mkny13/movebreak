@@ -1,6 +1,127 @@
 import AppKit
 import Foundation
 
+struct UpdateDownloadOperation {
+    let resume: () -> Void
+    let cancel: () -> Void
+}
+
+/// Synchronous staging boundary around URLSession's callback-based download API. The caller
+/// runs this off the main thread. Cancellation must eventually invoke the supplied completion,
+/// allowing a timeout to drain the callback before staging cleanup begins.
+final class UpdateDownloader {
+    typealias Completion = (URL?, URLResponse?, Error?) -> Void
+    typealias StartOperation = (URLRequest, @escaping Completion) -> UpdateDownloadOperation
+
+    private enum Outcome {
+        case success
+        case failure(String)
+    }
+
+    private final class CompletionState {
+        private let lock = NSLock()
+        private var outcome: Outcome?
+        let callbackFinished = DispatchSemaphore(value: 0)
+
+        func finish(
+            tempURL: URL?,
+            response: URLResponse?,
+            error: Error?,
+            destination: URL
+        ) {
+            defer { callbackFinished.signal() }
+            lock.withLock {
+                guard outcome == nil else { return }
+
+                if let error {
+                    removeDestination(destination)
+                    outcome = .failure(error.localizedDescription)
+                    return
+                }
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      let tempURL else {
+                    removeDestination(destination)
+                    outcome = .failure("bad download response")
+                    return
+                }
+                do {
+                    try FileManager.default.moveItem(at: tempURL, to: destination)
+                    outcome = .success
+                } catch {
+                    removeDestination(destination)
+                    outcome = .failure("couldn't save download: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        func claimTimeout(destination: URL, timeout: TimeInterval) -> Bool {
+            lock.withLock {
+                guard outcome == nil else { return false }
+                removeDestination(destination)
+                outcome = .failure("download timed out after \(Self.timeoutDescription(timeout)) seconds")
+                return true
+            }
+        }
+
+        var failure: String? {
+            lock.withLock {
+                guard case .failure(let message) = outcome else { return nil }
+                return message
+            }
+        }
+
+        private func removeDestination(_ destination: URL) {
+            try? FileManager.default.removeItem(at: destination)
+        }
+
+        private static func timeoutDescription(_ timeout: TimeInterval) -> String {
+            timeout.rounded(.towardZero) == timeout
+                ? String(Int(timeout))
+                : String(format: "%g", timeout)
+        }
+    }
+
+    private let timeout: TimeInterval
+    private let startOperation: StartOperation
+
+    init(timeout: TimeInterval = 120, startOperation: @escaping StartOperation = UpdateDownloader.urlSessionOperation) {
+        self.timeout = timeout
+        self.startOperation = startOperation
+    }
+
+    func download(from url: URL, to destination: URL) -> String? {
+        var request = URLRequest(url: url)
+        request.setValue("MoveBreak-Updater", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 60
+
+        let state = CompletionState()
+        let operation = startOperation(request) { tempURL, response, error in
+            state.finish(tempURL: tempURL, response: response, error: error, destination: destination)
+        }
+        operation.resume()
+
+        if state.callbackFinished.wait(timeout: .now() + timeout) == .timedOut {
+            if state.claimTimeout(destination: destination, timeout: timeout) {
+                operation.cancel()
+            }
+            // If completion won at the deadline, it may still be finishing its destination
+            // move. If timeout won, cancellation completion must be observed. Either way,
+            // staging cleanup cannot race callback-owned filesystem work after this wait.
+            state.callbackFinished.wait()
+        }
+        return state.failure
+    }
+
+    private static func urlSessionOperation(
+        request: URLRequest,
+        completion: @escaping Completion
+    ) -> UpdateDownloadOperation {
+        let task = URLSession.shared.downloadTask(with: request, completionHandler: completion)
+        return UpdateDownloadOperation(resume: { task.resume() }, cancel: { task.cancel() })
+    }
+}
+
 /// Checks GitHub Releases for a newer MoveBreak build and installs it in place once the
 /// app is idle. No external dependencies — this project can't use SwiftPM (see
 /// scripts/build_app.sh), so this is plain URLSession/Process/Security.
@@ -10,7 +131,11 @@ import Foundation
 /// `Bundle.main.bundlePath` rather than assuming /Applications.
 final class Updater {
     static let shared = Updater()
-    init() {}
+    private let downloader: UpdateDownloader
+
+    init(downloader: UpdateDownloader = UpdateDownloader()) {
+        self.downloader = downloader
+    }
 
     /// Set by AppDelegate. Installing only proceeds while this returns true, so an update
     /// never interrupts an active prompt or routine.
@@ -198,7 +323,7 @@ final class Updater {
 
         let zipPath = stagingDir.appendingPathComponent(assetName)
 
-        if let error = download(from: candidate.downloadURL, to: zipPath) {
+        if let error = downloader.download(from: candidate.downloadURL, to: zipPath) {
             try? fm.removeItem(at: stagingDir)
             return .failure(error)
         }
@@ -265,37 +390,6 @@ final class Updater {
         }
 
         return .success(appURL)
-    }
-
-    private func download(from url: URL, to destination: URL) -> String? {
-        var request = URLRequest(url: url)
-        request.setValue("MoveBreak-Updater", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 60
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var failure: String?
-        let task = URLSession.shared.downloadTask(with: request) { tempURL, response, error in
-            defer { semaphore.signal() }
-            if let error {
-                failure = error.localizedDescription
-                return
-            }
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let tempURL else {
-                failure = "bad download response"
-                return
-            }
-            do {
-                try FileManager.default.moveItem(at: tempURL, to: destination)
-            } catch {
-                failure = "couldn't save download: \(error.localizedDescription)"
-            }
-        }
-        task.resume()
-        if semaphore.wait(timeout: .now() + 120) == .timedOut {
-            task.cancel()
-            failure = "download timed out after 120 seconds"
-        }
-        return failure
     }
 
     // MARK: - Install

@@ -72,8 +72,10 @@ initializer runs there, and detector callbacks use `onMain` before touching pane
 UI. The polling scheduler owns slow CoreAudio/AppleScript inspection and serializes all
 detector lifecycle mutations on one utility queue; accepted results return to the main queue.
 The session logger has a separate serial queue for file and sync-queue mutation. Updater
-downloads and verification run away from the UI thread, while installation is gated on the
-app being idle with no MoveBreak panel visible.
+downloads and verification run away from the UI thread. Download completion has one locked
+terminal outcome; a timeout cancels and drains the URLSession callback before staging cleanup,
+so late or repeated callbacks cannot write the archive. Installation is gated on the app being
+idle with no MoveBreak panel visible.
 
 The shared panel is non-activating, floating, and full-screen auxiliary. Prompt and checklist
 windows therefore appear without proactively stealing focus and can join full-screen spaces.
@@ -215,7 +217,7 @@ Each tracked Swift source appears exactly once below.
 
 | Module | Responsibility |
 |---|---|
-| [`Updater.swift`](Sources/MoveBreak/Updater.swift) | Checks releases, stages verified bundles, swaps when idle, and relaunches. |
+| [`Updater.swift`](Sources/MoveBreak/Updater.swift) | Checks releases, owns race-free download completion and timeout cleanup, stages verified bundles, swaps when idle, and relaunches. |
 | [`UpdateValidation.swift`](Sources/MoveBreak/UpdateValidation.swift) | Validates releases, URLs, digests, bundle metadata, and semantic versions. |
 | [`UpdateSecurity.swift`](Sources/MoveBreak/UpdateSecurity.swift) | Enforces staging containment, code-signature validity, and signer continuity. |
 | [`ProcessRunner.swift`](Sources/MoveBreak/ProcessRunner.swift) | Executes fixed subprocesses without a shell, with output capture and timeouts. |
@@ -229,6 +231,6 @@ Each tracked Swift source appears exactly once below.
 | [`DetectionSelfTests.swift`](Sources/MoveBreak/DetectionSelfTests.swift) | Tests identity resolution, tab rules, lifecycle policy, scheduling, and settings validation. |
 | [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests records, routine persistence, local history, permissions, and pending queues. |
 | [`SecuritySelfTests.swift`](Sources/MoveBreak/SecuritySelfTests.swift) | Tests secret input, Keychain behavior, credential boundaries, and URL redaction. |
-| [`UpdateSelfTests.swift`](Sources/MoveBreak/UpdateSelfTests.swift) | Tests release, archive, bundle, staging, signer, and subprocess update boundaries. |
+| [`UpdateSelfTests.swift`](Sources/MoveBreak/UpdateSelfTests.swift) | Tests download completion races plus release, archive, bundle, staging, signer, and subprocess update boundaries. |
 
 <!-- architecture-module-inventory:end -->
