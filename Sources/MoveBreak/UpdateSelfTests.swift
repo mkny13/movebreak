@@ -10,7 +10,7 @@ enum UpdateSelfTests {
         let runner = ProcessRunner(
             terminationGracePeriod: 0.15,
             forceKillGracePeriod: 0.5,
-            pollIntervalMicroseconds: 1_000
+            maximumWaitInterval: 0.02
         )
 
         let normal = runner.run(
@@ -21,6 +21,34 @@ enum UpdateSelfTests {
         reporter.check(
             "process runner captures normal stdout and stderr",
             normal.isSuccess && normal.stdout == "normal stdout" && normal.stderr == "normal stderr"
+        )
+
+        let silentStart = ProcessInfo.processInfo.systemUptime
+        let silent = runner.run(executable: "/usr/bin/true", arguments: [], timeout: 2)
+        let silentDuration = ProcessInfo.processInfo.systemUptime - silentStart
+        reporter.check(
+            "silent short-lived process completes promptly",
+            silent.isSuccess
+                && silent.stdout.isEmpty
+                && silent.stderr.isEmpty
+                && silentDuration < 0.5,
+            detail: String(format: "completed in %.3fs", silentDuration)
+        )
+
+        let staggered = runner.run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "printf 'out-1\\n'; sleep 0.03; printf 'err-1\\n' >&2; "
+                    + "sleep 0.03; printf 'out-2\\n'; sleep 0.03; printf 'err-2\\n' >&2"
+            ],
+            timeout: 2
+        )
+        reporter.check(
+            "staggered stdout and stderr are captured completely",
+            staggered.isSuccess
+                && staggered.stdout == "out-1\nout-2\n"
+                && staggered.stderr == "err-1\nerr-2\n"
         )
 
         let nonzero = runner.run(
@@ -68,6 +96,31 @@ enum UpdateSelfTests {
                 && noisy.stdout.split(separator: "\n").count == 5000
                 && noisy.stderr.split(separator: "\n").count == 5000,
             detail: "stdout=\(noisy.stdout.utf8.count) bytes stderr=\(noisy.stderr.utf8.count) bytes"
+        )
+
+        // The background sleep inherits both pipe writers after its direct shell
+        // parent exits. Completion must follow the direct child, not descendant EOF.
+        let inheritedWriterStart = ProcessInfo.processInfo.systemUptime
+        let inheritedWriter = runner.run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "sleep 10 & descendant=$!; printf '%s' \"$descendant\" >&2; printf inherited"
+            ],
+            timeout: 2
+        )
+        let inheritedWriterDuration = ProcessInfo.processInfo.systemUptime - inheritedWriterStart
+        let inheritedWriterPID = Int32(inheritedWriter.stderr) ?? -1
+        if inheritedWriterPID > 0 {
+            _ = Darwin.kill(inheritedWriterPID, SIGKILL)
+        }
+        reporter.check(
+            "inherited pipe writer cannot delay direct-child completion",
+            inheritedWriter.isSuccess
+                && inheritedWriter.stdout == "inherited"
+                && inheritedWriterPID > 0
+                && inheritedWriterDuration < 0.5,
+            detail: String(format: "completed in %.3fs", inheritedWriterDuration)
         )
 
         let processFixture = SelfTestTemporaryDirectory(prefix: "movebreak-process-runner")

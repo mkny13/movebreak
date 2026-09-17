@@ -23,16 +23,16 @@ struct ProcessRunner {
 
     let terminationGracePeriod: TimeInterval
     let forceKillGracePeriod: TimeInterval
-    let pollIntervalMicroseconds: useconds_t
+    let maximumWaitInterval: TimeInterval
 
     init(
         terminationGracePeriod: TimeInterval = 2.0,
         forceKillGracePeriod: TimeInterval = 1.0,
-        pollIntervalMicroseconds: useconds_t = 5_000
+        maximumWaitInterval: TimeInterval = 0.05
     ) {
         self.terminationGracePeriod = max(0, terminationGracePeriod)
         self.forceKillGracePeriod = max(0, forceKillGracePeriod)
-        self.pollIntervalMicroseconds = pollIntervalMicroseconds
+        self.maximumWaitInterval = max(0.001, maximumWaitInterval)
     }
 
     static func run(
@@ -94,11 +94,11 @@ struct ProcessRunner {
         var terminationDeadline: TimeInterval?
         var forceKillDeadline: TimeInterval?
         var timedOut = false
+        var stdoutOpen = true
+        var stderrOpen = true
+        var drainStdoutFirst = true
 
         while process.isRunning {
-            Self.drainAvailable(from: stdoutRead.fileDescriptor, into: &stdoutData)
-            Self.drainAvailable(from: stderrRead.fileDescriptor, into: &stderrData)
-
             let now = ProcessInfo.processInfo.systemUptime
             if !timedOut, now >= timeoutDeadline {
                 timedOut = true
@@ -114,15 +114,78 @@ struct ProcessRunner {
                 break
             }
 
-            if pollIntervalMicroseconds > 0 {
-                usleep(pollIntervalMicroseconds)
+            let waitDeadline = Self.nextWaitDeadline(
+                now: now,
+                maximumWaitInterval: maximumWaitInterval,
+                timeoutDeadline: timedOut ? nil : timeoutDeadline,
+                terminationDeadline: terminationDeadline,
+                forceKillDeadline: forceKillDeadline
+            )
+            var descriptors = [
+                pollfd(
+                    fd: stdoutOpen ? stdoutRead.fileDescriptor : -1,
+                    events: Int16(POLLIN | POLLHUP | POLLERR),
+                    revents: 0
+                ),
+                pollfd(
+                    fd: stderrOpen ? stderrRead.fileDescriptor : -1,
+                    events: Int16(POLLIN | POLLHUP | POLLERR),
+                    revents: 0
+                )
+            ]
+            let waitResult = Self.waitForReadiness(&descriptors, until: waitDeadline)
+            if waitResult < 0 {
+                // A permanent poll failure cannot safely identify readable streams.
+                // Retire them, but preserve timeout escalation and child reaping via
+                // deadline-only poll calls rather than returning a live child.
+                stdoutOpen = false
+                stderrOpen = false
+                continue
             }
+
+            if descriptors[0].revents & Int16(POLLNVAL) != 0 {
+                stdoutOpen = false
+            }
+            if descriptors[1].revents & Int16(POLLNVAL) != 0 {
+                stderrOpen = false
+            }
+            let readableEvents = Int16(POLLIN | POLLHUP | POLLERR)
+            let stdoutReady = stdoutOpen && descriptors[0].revents & readableEvents != 0
+            let stderrReady = stderrOpen && descriptors[1].revents & readableEvents != 0
+            if drainStdoutFirst {
+                if stdoutReady {
+                    stdoutOpen = Self.drainAvailable(
+                        from: stdoutRead.fileDescriptor, into: &stdoutData
+                    )
+                }
+                if stderrReady {
+                    stderrOpen = Self.drainAvailable(
+                        from: stderrRead.fileDescriptor, into: &stderrData
+                    )
+                }
+            } else {
+                if stderrReady {
+                    stderrOpen = Self.drainAvailable(
+                        from: stderrRead.fileDescriptor, into: &stderrData
+                    )
+                }
+                if stdoutReady {
+                    stdoutOpen = Self.drainAvailable(
+                        from: stdoutRead.fileDescriptor, into: &stdoutData
+                    )
+                }
+            }
+            drainStdoutFirst.toggle()
         }
 
         // Drain everything already written after observing exit. Reads remain
         // nonblocking, so an inherited writer in an errant descendant cannot hang us.
-        Self.drainAvailable(from: stdoutRead.fileDescriptor, into: &stdoutData, chunkLimit: .max)
-        Self.drainAvailable(from: stderrRead.fileDescriptor, into: &stderrData, chunkLimit: .max)
+        _ = Self.drainAvailable(
+            from: stdoutRead.fileDescriptor, into: &stdoutData, chunkLimit: .max
+        )
+        _ = Self.drainAvailable(
+            from: stderrRead.fileDescriptor, into: &stderrData, chunkLimit: .max
+        )
 
         let exitCode: Int32
         if timedOut || process.isRunning {
@@ -148,13 +211,54 @@ struct ProcessRunner {
         }
     }
 
+    private static func nextWaitDeadline(
+        now: TimeInterval,
+        maximumWaitInterval: TimeInterval,
+        timeoutDeadline: TimeInterval?,
+        terminationDeadline: TimeInterval?,
+        forceKillDeadline: TimeInterval?
+    ) -> TimeInterval {
+        var deadline = now + maximumWaitInterval
+        for candidate in [timeoutDeadline, terminationDeadline, forceKillDeadline].compactMap({ $0 }) {
+            deadline = min(deadline, candidate)
+        }
+        return deadline
+    }
+
+    /// Blocks until either pipe changes state or the next lifecycle deadline arrives.
+    /// Signals are handled by recomputing the remaining monotonic-clock interval, so
+    /// repeated EINTR cannot extend a timeout or turn into a spin loop.
+    private static func waitForReadiness(
+        _ descriptors: inout [pollfd],
+        until deadline: TimeInterval
+    ) -> Int32 {
+        while true {
+            let remaining = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+            let milliseconds = Int32(min(
+                Double(Int32.max),
+                ceil(remaining * 1_000)
+            ))
+            let result = descriptors.withUnsafeMutableBufferPointer { buffer in
+                Darwin.poll(buffer.baseAddress, nfds_t(buffer.count), milliseconds)
+            }
+            if result >= 0 || errno != EINTR {
+                return result
+            }
+            if ProcessInfo.processInfo.systemUptime >= deadline {
+                return 0
+            }
+        }
+    }
+
     /// A per-pass limit keeps one continuously noisy stream from starving the other
     /// or delaying timeout enforcement. The final post-exit drain has no limit.
+    /// Returns whether the descriptor can still produce data. EOF, POLLNVAL-driven
+    /// EBADF, and other permanent read errors retire it from subsequent poll calls.
     private static func drainAvailable(
         from descriptor: Int32,
         into data: inout Data,
         chunkLimit: Int = 64
-    ) {
+    ) -> Bool {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var chunksRead = 0
 
@@ -168,8 +272,12 @@ struct ProcessRunner {
             if count < 0, errno == EINTR {
                 continue
             }
-            // EOF, EAGAIN, and permanent descriptor errors all end this drain pass.
-            break
+            if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                return true
+            }
+            // EOF and permanent descriptor errors cannot become readable later.
+            return false
         }
+        return true
     }
 }
