@@ -110,9 +110,11 @@ Local session data lives under `~/Library/Application Support/MoveBreak/`. The d
 created or tightened to mode `0700`; contained files are tightened to `0600`.
 `sessions.jsonl` is append-only local history and is written before a network request.
 `pending-sync.json` is a JSON array replaced atomically within the same directory after a
-Notion failure. The current queue is best-effort: a crash after the history append but before
-failed delivery is enqueued is not reconciled automatically. Durable Groundwork outbox work
-is intentionally future scope.
+Notion failure. Missing queue files represent an empty queue, while unreadable or malformed
+queue files fail closed: retry, add, and remove operations leave the existing file untouched
+and emit a payload-free diagnostic. The current queue is best-effort: a crash after the
+history append but before failed delivery is enqueued is not reconciled automatically.
+Durable Groundwork outbox work is intentionally future scope.
 
 ## Automatic-update trust boundary
 

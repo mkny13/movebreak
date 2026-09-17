@@ -4,6 +4,7 @@ import Foundation
 enum SessionLoggerError: Error, LocalizedError, CustomStringConvertible, Equatable {
     case encodingFailed(String)
     case decodingFailed(String)
+    case readFailed(String)
     case writeFailed(String)
     case directoryCreationFailed(String)
 
@@ -11,6 +12,7 @@ enum SessionLoggerError: Error, LocalizedError, CustomStringConvertible, Equatab
         switch self {
         case .encodingFailed(let msg): return "Failed to encode session record: \(msg)"
         case .decodingFailed(let msg): return "Failed to decode session record: \(msg)"
+        case .readFailed(let msg): return "Failed to read session data: \(msg)"
         case .writeFailed(let msg): return "Failed to write session data: \(msg)"
         case .directoryCreationFailed(let msg): return "Failed to create application support directory: \(msg)"
         }
@@ -29,6 +31,7 @@ final class SessionLogger {
     static let filePermissions: NSNumber = 0o600
 
     private let queue: DispatchQueue
+    private let deliver: (SessionRecord, @escaping (Result<Void, Error>) -> Void) -> Void
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -40,10 +43,12 @@ final class SessionLogger {
     init(
         supportDir: URL? = nil,
         fileManager: FileManager = .default,
-        queue: DispatchQueue = DispatchQueue(label: "com.mike.MoveBreak.sessionLogger")
+        queue: DispatchQueue = DispatchQueue(label: "com.mike.MoveBreak.sessionLogger"),
+        deliver: @escaping (SessionRecord, @escaping (Result<Void, Error>) -> Void) -> Void = NotionClient.createSessionPage
     ) {
         self.fileManager = fileManager
         self.queue = queue
+        self.deliver = deliver
         let dir: URL
         if let supportDir = supportDir {
             dir = supportDir
@@ -113,7 +118,14 @@ final class SessionLogger {
     /// Call once at launch to flush anything that failed to reach Notion last run.
     func retryPendingSyncs() {
         queue.async {
-            guard let pending = try? self.readPending(), !pending.isEmpty else { return }
+            let pending: [SessionRecord]
+            do {
+                pending = try self.readPending()
+            } catch {
+                self.reportPendingReadFailure(operation: "retry", error: error)
+                return
+            }
+            guard !pending.isEmpty else { return }
             for record in pending {
                 self.push(record)
             }
@@ -123,7 +135,7 @@ final class SessionLogger {
     // MARK: - Notion push
 
     private func push(_ record: SessionRecord) {
-        NotionClient.createSessionPage(record) { [weak self] result in
+        deliver(record) { [weak self] result in
             guard let self else { return }
             self.queue.async {
                 switch result {
@@ -172,13 +184,13 @@ final class SessionLogger {
         guard fileManager.fileExists(atPath: pendingFile.path) else {
             return []
         }
-        try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: pendingFile.path)
         let data: Data
         do {
             data = try Data(contentsOf: pendingFile)
         } catch {
-            throw SessionLoggerError.writeFailed("Read failed: \(error.localizedDescription)")
+            throw SessionLoggerError.readFailed(error.localizedDescription)
         }
+        try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: pendingFile.path)
         do {
             return try decoder.decode([SessionRecord].self, from: data)
         } catch {
@@ -211,24 +223,50 @@ final class SessionLogger {
     }
 
     private func addToPending(_ record: SessionRecord) {
+        let records: [SessionRecord]
         do {
-            var records = (try? readPending()) ?? []
-            guard !records.contains(where: { $0.id == record.id }) else { return }
-            records.append(record)
-            try writePending(records)
+            records = try readPending()
         } catch {
-            FileHandle.standardError.write(Data("SessionLogger addToPending error: \(error.localizedDescription)\n".utf8))
+            reportPendingReadFailure(operation: "add", error: error)
+            return
+        }
+        guard !records.contains(where: { $0.id == record.id }) else { return }
+        do {
+            try writePending(records + [record])
+        } catch {
+            FileHandle.standardError.write(Data("SessionLogger pending-sync add failed: \(error.localizedDescription)\n".utf8))
         }
     }
 
     private func removeFromPending(_ id: UUID) {
+        var records: [SessionRecord]
         do {
-            var records = (try? readPending()) ?? []
-            guard let index = records.firstIndex(where: { $0.id == id }) else { return }
-            records.remove(at: index)
+            records = try readPending()
+        } catch {
+            reportPendingReadFailure(operation: "remove", error: error)
+            return
+        }
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
+        records.remove(at: index)
+        do {
             try writePending(records)
         } catch {
-            FileHandle.standardError.write(Data("SessionLogger removeFromPending error: \(error.localizedDescription)\n".utf8))
+            FileHandle.standardError.write(Data("SessionLogger pending-sync remove failed: \(error.localizedDescription)\n".utf8))
         }
+    }
+
+    private func reportPendingReadFailure(operation: String, error: Error) {
+        let category: String
+        switch error {
+        case SessionLoggerError.decodingFailed:
+            category = "malformed data"
+        case SessionLoggerError.readFailed:
+            category = "unreadable data"
+        default:
+            category = "read error"
+        }
+        FileHandle.standardError.write(Data(
+            "SessionLogger pending-sync \(operation) aborted; existing queue preserved (\(category)).\n".utf8
+        ))
     }
 }
