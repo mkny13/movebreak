@@ -130,6 +130,13 @@ pass. Replacement and relaunch occur only when detection is unpaused and idle an
 routine, or editor panel is visible. Any validation failure leaves the installed bundle
 untouched.
 
+Subprocess stdout and stderr use synchronously owned, nonblocking pipes. The runner waits with
+`poll(2)` for pipe readiness or the next timeout, SIGTERM, or SIGKILL deadline, alternating the
+first stream drained on each wake to avoid starvation. A short maximum wait also rechecks direct
+child exit when a descendant incorrectly inherits a pipe writer. Cleanup performs a final
+unlimited nonblocking drain, so inherited writers cannot turn process completion into an
+unbounded EOF wait and no asynchronous pipe callback can outlive the returned result.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles every source file directly with `swiftc`, targeting arm64

@@ -136,13 +136,22 @@ struct ProcessRunner {
             let waitResult = Self.waitForReadiness(&descriptors, until: waitDeadline)
             if waitResult < 0 {
                 // A permanent poll failure cannot safely identify readable streams.
-                // End the bounded wait loop; the final nonblocking drain still keeps
-                // already-buffered output and descriptor ownership deterministic.
-                break
+                // Retire them, but preserve timeout escalation and child reaping via
+                // deadline-only poll calls rather than returning a live child.
+                stdoutOpen = false
+                stderrOpen = false
+                continue
             }
 
-            let stdoutReady = stdoutOpen && descriptors[0].revents != 0
-            let stderrReady = stderrOpen && descriptors[1].revents != 0
+            if descriptors[0].revents & Int16(POLLNVAL) != 0 {
+                stdoutOpen = false
+            }
+            if descriptors[1].revents & Int16(POLLNVAL) != 0 {
+                stderrOpen = false
+            }
+            let readableEvents = Int16(POLLIN | POLLHUP | POLLERR)
+            let stdoutReady = stdoutOpen && descriptors[0].revents & readableEvents != 0
+            let stderrReady = stderrOpen && descriptors[1].revents & readableEvents != 0
             if drainStdoutFirst {
                 if stdoutReady {
                     stdoutOpen = Self.drainAvailable(
