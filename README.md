@@ -117,8 +117,26 @@ interruption mid-song is the thing worth avoiding.
 
 Covers helper-process → app resolution, the Relisten/YouTube combinations, active-vs-
 background tabs, ambiguous mixes, and host-matching edge cases. No browser or permission
-needed. Also runs automatically as part of `build_app.sh`, which refuses to package a
-build that fails it.
+needed. Its `SUMMARY` lines report stable case counts and elapsed time for every suite and
+the complete run. It also runs automatically once as part of `build_app.sh`, which refuses
+to package a build that fails it.
+
+For an opt-in flakiness, warning, inventory, and timing check against the already-built
+executable, run:
+
+```bash
+./scripts/test_health.sh
+```
+
+This performs five complete runs by default. The first is the inventory and timing baseline;
+later runs must keep the same suites and case counts, exit successfully, produce no unexpected
+stderr/runtime warnings, finish before the per-run timeout, and stay within a generous timing
+limit of 3× the baseline plus five seconds. It reports the slowest run and suite so timing creep
+can be investigated without treating the suite as a machine-specific microbenchmark. Run
+`./scripts/test_health.sh --help` for `--runs`, `--timeout`, relative timing, explicit
+`--max-seconds`, and executable overrides. The corresponding `MOVEBREAK_HEALTH_*` environment
+variables are useful for automation. This stress multiplier is never part of the ordinary
+packaged build.
 
 ### What your browsers have open, right now
 
@@ -343,7 +361,8 @@ adding the "Sitting at Desk" mode later is a content change rather than a refact
 MoveBreak compiles every Swift source directly with `swiftc`; it has no Xcode project,
 SwiftPM manifest, or external dependency. CommandLineTools provides the compiler and system
 frameworks, so full Xcode is not required. The build script runs all CLI self-tests before
-packaging and signing the app.
+packaging and signing the app. It performs one self-test run; use `./scripts/test_health.sh`
+after building when repeat-run health and timing diagnostics are wanted.
 
 For the complete current runtime, data flow, threading and security boundaries, and an
 inventory of every source module, see [ARCHITECTURE.md](ARCHITECTURE.md). For ordered future
