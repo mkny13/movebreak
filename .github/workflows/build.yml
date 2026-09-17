@@ -4,60 +4,112 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-  workflow_dispatch: {}
+  pull_request:
+  workflow_dispatch:
+
+# Verification is the default security boundary. Jobs opt in to broader access below.
+permissions:
+  contents: read
+
+concurrency:
+  group: movebreak-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
-  build:
+  verify:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: macos-14
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # actions/checkout v4.4.0; review release notes before updating this SHA.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build and self-test with ad-hoc signature
+        run: ./scripts/build_app.sh
+
+  release:
+    if: ${{ github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: macos-14
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout v4.4.0; review release notes before updating this SHA.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Stamp version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Validate tag and stamp version
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR or vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
           plutil -replace CFBundleShortVersionString -string "$VERSION" Resources/Info.plist
           plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" Resources/Info.plist
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Import signing identity
+      - name: Import signing identity and package app
+        shell: bash
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
-          KEYCHAIN=build.keychain
-          KEYCHAIN_PASSWORD=$(uuidgen)
-          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import cert.p12 -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
-          rm cert.p12
+          set -euo pipefail
+          umask 077
 
-      - name: Build MoveBreak.app
-        run: ./scripts/build_app.sh "MoveBreak Signing"
+          SIGNING_DIR="$(mktemp -d "${RUNNER_TEMP}/movebreak-signing.XXXXXX")"
+          CERTIFICATE_PATH="${SIGNING_DIR}/certificate.p12"
+          KEYCHAIN_PATH="${SIGNING_DIR}/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)-$(uuidgen)"
+          PREVIOUS_KEYCHAINS=()
+          while IFS= read -r keychain; do
+            keychain="${keychain#\"}"
+            keychain="${keychain%\"}"
+            PREVIOUS_KEYCHAINS+=("$keychain")
+          done < <(security list-keychains -d user)
 
-      - name: Zip app
-        run: ditto -c -k --sequesterRsrc --keepParent MoveBreak.app MoveBreak.app.zip
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if (( ${#PREVIOUS_KEYCHAINS[@]} )); then
+              security list-keychains -d user -s "${PREVIOUS_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+            fi
+            security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+            rm -rf "$SIGNING_DIR"
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT TERM
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MoveBreak-${{ github.sha }}
-          path: MoveBreak.app.zip
-          retention-days: 30
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${PREVIOUS_KEYCHAINS[@]}"
+
+          rm -f "$CERTIFICATE_PATH"
+          unset MACOS_CERT_P12 MACOS_CERT_PASSWORD
+
+          ./scripts/build_app.sh "MoveBreak Signing"
+          ditto -c -k --sequesterRsrc --keepParent MoveBreak.app MoveBreak.app.zip
 
       - name: Create release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        # softprops/action-gh-release v2.6.2; review release notes before updating this SHA.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: MoveBreak.app.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
