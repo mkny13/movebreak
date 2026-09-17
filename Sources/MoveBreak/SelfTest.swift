@@ -1454,6 +1454,145 @@ enum SelfTest {
         return failures
     }
 
+    // MARK: - External Process and Pipe Lifecycle Cases
+
+    private static func openFileDescriptorCount() -> Int {
+        (0..<getdtablesize()).reduce(into: 0) { count, descriptor in
+            errno = 0
+            if fcntl(descriptor, F_GETFD) != -1 || errno != EBADF {
+                count += 1
+            }
+        }
+    }
+
+    private static func runProcessRunnerCases() -> Int {
+        var failures = 0
+        func check(_ name: String, _ passed: Bool, detail: String = "") {
+            if !passed { failures += 1 }
+            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
+            if !passed && !detail.isEmpty { print("      \(detail)") }
+        }
+
+        let runner = ProcessRunner(
+            terminationGracePeriod: 0.15,
+            forceKillGracePeriod: 0.5,
+            pollIntervalMicroseconds: 1_000
+        )
+
+        let normal = runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'normal stdout'; printf 'normal stderr' >&2"],
+            timeout: 2
+        )
+        check(
+            "process runner captures normal stdout and stderr",
+            normal.isSuccess && normal.stdout == "normal stdout" && normal.stderr == "normal stderr"
+        )
+
+        let nonzero = runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'failure detail' >&2; exit 23"],
+            timeout: 2
+        )
+        check(
+            "process runner preserves nonzero exit and stderr",
+            !nonzero.timedOut && nonzero.exitCode == 23 && nonzero.stderr == "failure detail"
+        )
+
+        let missing = runner.run(
+            executable: "/definitely/missing/movebreak-test-executable",
+            arguments: [],
+            timeout: 0.1
+        )
+        check(
+            "missing executable returns structured launch failure",
+            !missing.timedOut
+                && missing.exitCode == ProcessResult.unavailableExitCode
+                && !missing.stderr.isEmpty
+        )
+
+        let noisyCommand = """
+        i=0
+        while [ "$i" -lt 5000 ]; do
+          printf 'stdout-%05d-xxxxxxxxxxxxxxxx\n' "$i"
+          printf 'stderr-%05d-yyyyyyyyyyyyyyyy\n' "$i" >&2
+          i=$((i + 1))
+        done
+        """
+        let noisy = runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", noisyCommand],
+            timeout: 5
+        )
+        check(
+            "high-volume stdout and stderr drain without truncation",
+            noisy.isSuccess
+                && noisy.stdout.contains("stdout-00000-")
+                && noisy.stdout.contains("stdout-04999-")
+                && noisy.stderr.contains("stderr-00000-")
+                && noisy.stderr.contains("stderr-04999-")
+                && noisy.stdout.split(separator: "\n").count == 5000
+                && noisy.stderr.split(separator: "\n").count == 5000,
+            detail: "stdout=\(noisy.stdout.utf8.count) bytes stderr=\(noisy.stderr.utf8.count) bytes"
+        )
+
+        let fixtureDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("movebreak-process-runner-\(UUID().uuidString)")
+        let ignoresTermURL = fixtureDir.appendingPathComponent("ignores-term.sh")
+        do {
+            try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+            let script = "#!/bin/sh\ntrap '' TERM\nwhile :; do :; done\n"
+            try Data(script.utf8).write(to: ignoresTermURL)
+            guard chmod(ignoresTermURL.path, 0o700) == 0 else {
+                check("termination-resistant helper fixture is executable", false)
+                try? FileManager.default.removeItem(at: fixtureDir)
+                return failures
+            }
+        } catch {
+            check("termination-resistant helper fixture is created", false, detail: "\(error)")
+            try? FileManager.default.removeItem(at: fixtureDir)
+            return failures
+        }
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
+
+        let timeoutStart = ProcessInfo.processInfo.systemUptime
+        let timedOut = runner.run(executable: ignoresTermURL.path, arguments: [], timeout: 0.1)
+        let timeoutDuration = ProcessInfo.processInfo.systemUptime - timeoutStart
+        check(
+            "termination-resistant process is force-killed within the bound",
+            timedOut.timedOut
+                && timedOut.exitCode == ProcessResult.unavailableExitCode
+                && timeoutDuration < 1.25,
+            detail: String(format: "completed in %.3fs", timeoutDuration)
+        )
+
+        // Repeat every lifecycle class while comparing the current descriptor table.
+        // This catches leaked read/write pipe ends on success, failure, and timeout.
+        let descriptorsBefore = openFileDescriptorCount()
+        var repeatsPassed = true
+        for _ in 0..<12 {
+            repeatsPassed = repeatsPassed && runner.run(
+                executable: "/bin/sh", arguments: ["-c", "printf ok"], timeout: 1
+            ).isSuccess
+            repeatsPassed = repeatsPassed && runner.run(
+                executable: "/bin/sh", arguments: ["-c", "printf bad >&2; exit 7"], timeout: 1
+            ).exitCode == 7
+            repeatsPassed = repeatsPassed && runner.run(
+                executable: "/missing/movebreak-repeat", arguments: [], timeout: 0.1
+            ).exitCode == ProcessResult.unavailableExitCode
+            let repeatedTimeout = runner.run(
+                executable: ignoresTermURL.path, arguments: [], timeout: 0.02
+            )
+            repeatsPassed = repeatsPassed && repeatedTimeout.timedOut
+        }
+        let descriptorsAfter = openFileDescriptorCount()
+        check("repeated process runs leave file-descriptor count stable",
+              repeatsPassed && descriptorsAfter == descriptorsBefore,
+              detail: "before=\(descriptorsBefore), after=\(descriptorsAfter)")
+
+        return failures
+    }
+
     // MARK: - Automatic Update Trust Boundary & Verification Cases
 
     private static func runUpdateTrustCases() -> Int {
@@ -1895,6 +2034,9 @@ enum SelfTest {
         print("")
         print("Session record JSON schema compatibility")
         failures += runSessionCompatibilityCases()
+        print("")
+        print("External command output, timeout, and pipe lifecycle")
+        failures += runProcessRunnerCases()
         print("")
         print("Automatic update trust boundary, staging containment & code signature verification")
         failures += runUpdateTrustCases()
