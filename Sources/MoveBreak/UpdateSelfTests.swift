@@ -10,7 +10,7 @@ enum UpdateSelfTests {
         let runner = ProcessRunner(
             terminationGracePeriod: 0.15,
             forceKillGracePeriod: 0.5,
-            pollIntervalMicroseconds: 1_000
+            maximumWaitInterval: 0.02
         )
 
         let normal = runner.run(
