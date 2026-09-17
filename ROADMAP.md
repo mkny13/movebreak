@@ -22,24 +22,23 @@ Groundwork does not currently generate MoveBreak routines, receive MoveBreak com
 or provide MoveBreak's active persistence. Any prose describing those behaviors is future
 state until its implementation issue merges.
 
-## Active Groundwork migration
+## Planned Groundwork migration
 
-[Issue #2](https://github.com/mkny13/movebreak/issues/2) is the umbrella. Its child work is
-ordered by contract and dependency:
+[Issue #2](https://github.com/mkny13/movebreak/issues/2) is the open umbrella. Issues
+#3–#7 are also open, so none of the behavior in this section is shipped. The first two
+implementation changes belong to `mkny13/groundwork` even though their coordinating issues
+are tracked in this repository; the remaining three change `mkny13/movebreak`.
 
-1. [#3 — Groundwork routine contract](https://github.com/mkny13/movebreak/issues/3): add
-   the authenticated, versioned, read-only routine endpoint in Groundwork.
-2. [#4 — Groundwork completion persistence](https://github.com/mkny13/movebreak/issues/4):
-   add atomic and idempotent completion persistence, dependent on #3.
-3. [#5 — MoveBreak transport and offline cache](https://github.com/mkny13/movebreak/issues/5):
-   add the native client, separate credentials, strict response models, and labeled cache or
-   bundled fallback, dependent on #3.
-4. [#6 — Generated-routine HUD](https://github.com/mkny13/movebreak/issues/6): preserve
-   clinical IDs, authored order, warnings, provenance, and honest actual-dose capture in the
-   floating UI, dependent on #5.
-5. [#7 — Durable completion sync and Notion retirement](https://github.com/mkny13/movebreak/issues/7):
-   introduce a durable Groundwork outbox, connect completion receipts, and remove active
-   Notion code paths without deleting historical local data, dependent on #4 and #6.
+| Issue | Implementation repository | Depends on | Planned boundary |
+|---|---|---|---|
+| [#3 — Groundwork routine contract](https://github.com/mkny13/movebreak/issues/3) | `mkny13/groundwork` | — | Authenticated, versioned, read-only routine endpoint and shared wire contract. |
+| [#4 — Groundwork completion persistence](https://github.com/mkny13/movebreak/issues/4) | `mkny13/groundwork` | #3 | Atomic, idempotent completion persistence into existing History and load accounting. |
+| [#5 — MoveBreak transport and offline cache](https://github.com/mkny13/movebreak/issues/5) | `mkny13/movebreak` | #3 | Native client, separate credentials, strict response models, and labeled cache or bundled fallback; no HUD wiring yet. |
+| [#6 — Generated-routine HUD](https://github.com/mkny13/movebreak/issues/6) | `mkny13/movebreak` | #5 | Generated-routine prompt/checklist path preserving IDs, authored order, warnings, provenance, and honest actual-dose capture; no new sync path yet. |
+| [#7 — Durable completion sync and Notion retirement](https://github.com/mkny13/movebreak/issues/7) | `mkny13/movebreak` | #4 and #6 | Durable Groundwork outbox and receipts, followed by removal of active Notion paths without deleting historical local data or credentials. |
+
+The dependency shape is #3 → (#4 and #5), #5 → #6, and (#4 and #6) → #7. Thus #4 and
+#5 may proceed independently after #3; #7 remains the final cutover.
 
 The native detection pipeline, session lifecycle, main-thread UI boundary, floating-panel
 behavior, and local history remain MoveBreak responsibilities throughout this sequence.
@@ -50,9 +49,9 @@ These are not zombies and must not be removed early:
 
 | Current component | Current role | Migration boundary |
 |---|---|---|
-| Static exercise catalog | Source of all current exercise content and default routine seeds. | #5 and #6 require bundled content to remain as a clearly labeled offline/local fallback. |
+| Static exercise catalog | Source of all current exercise content and default routine seeds. | #5 establishes bundled content as a labeled no-cache fallback; #6 displays that fallback alongside the generated path. |
 | Local routine store and editor | Source of prompt/menu choices and user customization. | #6 keeps editable saved routines as explicit local fallbacks; no current issue authorizes deleting the editor or saved data. |
-| Local routine models and shuffle | Resolve and order all current checklist content. | #6 adds a generated path that preserves server order while retaining existing shuffle behavior for local routines. |
+| Local routine models and shuffle | Resolve and order all current checklist content. | #6 extends the display/completion models and adds a generated path that preserves server order while retaining existing shuffle behavior for local routines. |
 | Local JSONL history | First persistence step for every current completion. | #7 extends records backward-compatibly and keeps old history readable; it does not upload history automatically. |
 | Notion client, setup, Keychain item, and pending queue | Optional current remote sync after local append. | They remain active through #5 and #6. Only #7 removes active Notion paths; legacy files and credentials remain untouched. |
 
@@ -62,8 +61,8 @@ fresh Groundwork clinical validation.
 
 ## Completion criteria for the migration
 
-The umbrella is complete only after all five child implementations merge in dependency
-order, native and backend tests pass, generated routines retain warnings and provenance,
-confirmed completions are locally durable before network I/O, retries are idempotent, and
-Groundwork History/analytics reflect the work. Notion retirement occurs last, without
-deleting or silently importing legacy data.
+The umbrella is complete only after all five child implementations merge with their
+dependency gates satisfied, native and backend tests pass, generated routines retain warnings
+and provenance, confirmed completions are locally durable before network I/O, retries are
+idempotent, and Groundwork History/analytics reflect the work. Notion retirement occurs last,
+without deleting or silently importing legacy data.

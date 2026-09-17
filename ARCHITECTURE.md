@@ -11,15 +11,18 @@ window lifecycle, SwiftUI for panel content, CoreAudio for process stream state,
 Foundation/Security for persistence, networking, subprocesses, and Keychain access. It has
 no service process, database, Xcode project, Swift package, or third-party dependency.
 
-The executable first rejects command-line secrets and routes terminal-only commands before
-starting `NSApplication`. The commands cover help/version, self-tests, browser-tab probing,
-live diagnostics, Notion setup, update checks, demos, status checks, and same-user remote
-control. Normal launch creates `AppDelegate`, selects accessory activation policy (no Dock
-icon), and enters the AppKit run loop.
+The executable first rejects command-line secrets. Help, version, self-test, browser-tab
+probe, live diagnostics, interactive Notion setup, one-shot update check, and same-user
+remote-control flags terminate without entering the long-running app. Demo and status-check
+flags instead modify an app launch. Normal launch creates `AppDelegate`, selects accessory
+activation policy (no Dock icon), and enters the AppKit run loop.
 
-`AppDelegate` is the composition root. It creates the detector, routine store, three panel
-controllers, status item, polling scheduler, session logger hooks, remote-control listener,
-and updater safety predicate.
+`AppDelegate` is the composition root. It owns the detector, routine store, three panel
+controllers, status item, timer, and polling scheduler; wires prompt completion into the
+shared session logger; registers the remote-control listener; and supplies the updater's
+idle predicate. At launch it asks the logger to retry pending Notion work before checking
+CoreAudio support. Unsupported systems keep the status item and remote-control listener but
+do not start polling or updates. The three demo modes also return before polling and updates.
 
 ## Observation-to-completion data flow
 
@@ -35,13 +38,15 @@ and updater safety predicate.
 4. The same serial scheduler accepts the observation into the debounced session lifecycle.
    A generation token discards work begun before pause, resume, or shutdown.
 5. When one prompt is due for the open session, the callback crosses to the main queue and
-   presents saved local routine choices. Decline and timeout choices update cooldown state on
-   the detection queue.
+   presents every nonempty saved local routine. Decline and timeout choices update cooldown
+   state on the detection queue. Manual menu and remote `--show` requests bypass detection;
+   `--show` labels an idle detector state as a meeting for prompt copy.
 6. Choosing a routine marks the session prompted, partitions a per-session shuffle into
    walk-safe work followed by pause-belt work, and opens the checklist panel.
-7. Pressing Done captures the checked exercise IDs. The session logger appends a record to
-   local JSONL before attempting optional Notion upload; a failed upload is added to the
-   local pending queue and launch retries pending entries.
+7. Pressing Done closes the checklist and captures the checked exercise IDs. The session
+   logger then appends a record to local JSONL before attempting Notion delivery; a failed
+   upload is added to the local pending queue and launch retries pending entries. The current
+   UI does not wait for or surface the local-write result; failures are written to stderr.
 
 ## Detection and classification
 
@@ -57,8 +62,11 @@ stages first exclude configured ignored applications, including their helpers:
    active tab from each browser window is accepted only for an unambiguous call or one video
    with no music conflict.
 
-Unknown or ambiguous browser audio is deliberately classified as idle. Diagnostics sanitize
-URLs to host-level output unless verbose mode is explicitly selected.
+Unknown or ambiguous browser audio is deliberately classified as idle. URL matching enforces
+host boundaries and compares normalized host-plus-path values. Browser targets are limited to
+five built-in AppleScript dialects even if preferences contain other bundle IDs. Diagnostics
+sanitize URLs to host-level output unless verbose mode is explicitly selected; verbose output
+is therefore an explicit browsing-data disclosure.
 
 `SessionLifecycle` debounces state changes, preserves one logical session across short idle
 gaps and meeting-to-video transitions, prompts at most once per session, and applies separate
@@ -71,11 +79,13 @@ AppKit creation and mutation belong on the main thread. `FloatingPanel` asserts 
 initializer runs there, and detector callbacks use `onMain` before touching panel or status
 UI. The polling scheduler owns slow CoreAudio/AppleScript inspection and serializes all
 detector lifecycle mutations on one utility queue; accepted results return to the main queue.
-The session logger has a separate serial queue for file and sync-queue mutation. Updater
-downloads and verification run away from the UI thread. Download completion has one locked
-terminal outcome; a timeout cancels and drains the URLSession callback before staging cleanup,
-so late or repeated callbacks cannot write the archive. Installation is gated on the app being
-idle with no MoveBreak panel visible.
+Prompt decline, timeout, and routine-start mutations are sent to that same queue. The session
+logger has a separate serial queue for history and pending-queue mutation; URLSession
+completions dispatch mutations back to it. Updater network callbacks return to the main queue,
+while archive download and verification run on a utility queue. Download completion has one
+locked terminal outcome; a timeout cancels and drains the URLSession callback before staging
+cleanup, so late or repeated callbacks cannot write the archive. Installation is gated on the
+app being unpaused and idle with no MoveBreak panel visible.
 
 The shared panel is non-activating, floating, and full-screen auxiliary. Prompt and checklist
 windows therefore appear without proactively stealing focus and can join full-screen spaces.
@@ -86,25 +96,33 @@ The deliberately opened routine editor uses centered placement.
 The bundled exercise catalog is the current source of exercise names, areas, dose text,
 cues, posture, and treadmill-safety tags. The local routine store owns user-created routine
 names and ordered catalog IDs, JSON-encoded in `UserDefaults`. On first launch it seeds three
-editable routines. Empty routines remain editable but are omitted from the prompt and menu.
+editable routines. An intentionally saved empty routine list remains empty; absent or
+undecodable saved data restores the three seeds. Empty individual routines remain editable
+but are omitted from the prompt and menu, and missing catalog IDs are skipped during
+resolution.
 
 Resolved routines copy catalog exercises into the display model. Each launch shuffles
 walk-safe and pause-belt partitions independently while keeping the safe partition first.
-The checklist groups exercises by area in the resulting order and reports only explicitly
-checked IDs. The static catalog, local routine editor, and saved routines are live product
-behavior, not dead abstractions; their role during Groundwork migration is defined in the
-roadmap.
+The checklist groups exercises by the order in which each area first appears and preserves
+relative order within an area; this grouping can move later exercises next to earlier ones in
+the same area. Done reports only explicitly checked IDs and may report an empty completion.
+The static catalog, local routine editor, and saved routines are live product behavior, not
+dead abstractions; their role during Groundwork migration is defined in the roadmap.
 
 ## Configuration, credentials, and persistence
 
-`Preferences` reads and normalizes tuning values from the `com.mike.movebreak`
-`UserDefaults` domain. Numeric settings are bounded, URL patterns are normalized, and the
-browser list cannot expand beyond implementations with a known AppleScript dialect.
+`Preferences` reads and normalizes detection lists, URL patterns, timing values, and the
+Notion database ID from the app's `com.mike.movebreak` `UserDefaults` domain. Invalid or
+empty normalized overrides fall back to built-in values; numeric settings are bounded, and
+the browser list cannot expand beyond implementations with a known AppleScript dialect.
+`RoutineStore` uses the same defaults domain under its JSON-encoded `savedRoutines` key.
 
 The current optional remote integration is Notion. Interactive setup writes the integration
 token to the device-local Keychain service `com.mike.MoveBreak.notion` and the non-secret
-database ID to preferences. Tokens are not accepted as command-line values. The client sends
-completed session summaries directly to Notion over HTTPS.
+database ID to preferences. The generic-password item uses account `integrationToken` and
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Tokens are not accepted as command-line
+values. The client sends completed session summaries directly to Notion's page-creation API
+over HTTPS.
 
 Local session data lives under `~/Library/Application Support/MoveBreak/`. The directory is
 created or tightened to mode `0700`; contained files are tightened to `0600`.
@@ -112,15 +130,19 @@ created or tightened to mode `0700`; contained files are tightened to `0600`.
 `pending-sync.json` is a JSON array replaced atomically within the same directory after a
 Notion failure. Missing queue files represent an empty queue, while unreadable or malformed
 queue files fail closed: retry, add, and remove operations leave the existing file untouched
-and emit a payload-free diagnostic. The current queue is best-effort: a crash after the
-history append but before failed delivery is enqueued is not reconciled automatically.
-Durable Groundwork outbox work is intentionally future scope.
+and emit a payload-free diagnostic. Every delivery failure is queued, including absent
+credentials and permanent HTTP errors; retries occur at launch without backoff or user-facing
+queue state. The current queue is best-effort: a crash after the history append but before
+failed delivery is enqueued is not reconciled automatically, and directory permission/setup
+errors are attempted rather than made fatal. Durable Groundwork outbox work is intentionally
+future scope.
 
 ## Automatic-update trust boundary
 
-The updater polls the latest GitHub release for `mkny13/movebreak`, but automatic
-installation is disabled when the running app is ad-hoc signed. Before staging a candidate it
-requires all of the following:
+For a certificate-signed normal launch, the updater checks the latest GitHub release for
+`mkny13/movebreak` immediately and every 24 hours. Ad-hoc builds and builds without a leaf
+signing certificate do not start automatic checking or installation; the one-shot CLI check
+applies the same gate. Before staging a candidate it requires all of the following:
 
 - a newer, well-formed release tag and exactly named `MoveBreak.app.zip` asset;
 - an HTTPS GitHub release URL for the expected repository, tag, and asset;
@@ -133,9 +155,11 @@ requires all of the following:
 
 Fixed absolute executables and argument arrays are used for archive, signature, and xattr
 operations; no shell evaluates downloaded input. Quarantine is removed only after all checks
-pass. Replacement and relaunch occur only when detection is unpaused and idle and no prompt,
-routine, or editor panel is visible. Any validation failure leaves the installed bundle
-untouched.
+pass. The updater removes abandoned staging directories at the next staging attempt.
+Replacement targets the running bundle's actual location and relaunches only when detection
+is unpaused and idle and no prompt, routine, or editor panel is visible. A validation failure
+leaves the installed bundle untouched. A reported replacement failure does not relaunch and
+is retried from the staged candidate at a later safe moment.
 
 Subprocess stdout and stderr use synchronously owned, nonblocking pipes. The runner waits with
 `poll(2)` for pipe readiness or the next timeout, SIGTERM, or SIGKILL deadline, alternating the
@@ -174,7 +198,7 @@ Each tracked Swift source appears exactly once below.
 | Module | Responsibility |
 |---|---|
 | [`main.swift`](Sources/MoveBreak/main.swift) | Validates arguments, routes CLI modes and remote commands, then starts the accessory AppKit app. |
-| [`AppDelegate.swift`](Sources/MoveBreak/AppDelegate.swift) | Composition root, serialized poll scheduling, menu/status UI, callbacks, and updater idle gating. |
+| [`AppDelegate.swift`](Sources/MoveBreak/AppDelegate.swift) | Composition root for serialized polling, menu/status UI, panel/logger callbacks, remote control, and updater idle gating. |
 | [`RemoteControl.swift`](Sources/MoveBreak/RemoteControl.swift) | Same-user distributed-notification commands for show, pause/resume, and quit. |
 | [`MainThread.swift`](Sources/MoveBreak/MainThread.swift) | Main-queue handoff helper for AppKit-bound callbacks. |
 
@@ -190,7 +214,7 @@ Each tracked Swift source appears exactly once below.
 | [`Diagnose.swift`](Sources/MoveBreak/Diagnose.swift) | Runs the live audio/tab/classification diagnostic table. |
 | [`TabProbe.swift`](Sources/MoveBreak/TabProbe.swift) | Runs one-shot inspection of supported running browsers. |
 | [`URLDisplay.swift`](Sources/MoveBreak/URLDisplay.swift) | Sanitizes diagnostic URLs to privacy-preserving display strings. |
-| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated defaults and `UserDefaults` overrides for detection and timing. |
+| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides and the non-secret Notion database preference. |
 
 ### Routine domain and UI
 
@@ -209,7 +233,7 @@ Each tracked Swift source appears exactly once below.
 | Module | Responsibility |
 |---|---|
 | [`SessionRecord.swift`](Sources/MoveBreak/SessionRecord.swift) | Codable local completion summary model. |
-| [`SessionLogger.swift`](Sources/MoveBreak/SessionLogger.swift) | Serial local JSONL writes, protected file modes, and atomic pending-sync queue updates. |
+| [`SessionLogger.swift`](Sources/MoveBreak/SessionLogger.swift) | Serial local JSONL writes, protected file modes, Notion delivery, and atomic pending-sync queue updates. |
 | [`NotionClient.swift`](Sources/MoveBreak/NotionClient.swift) | Builds and sends current Notion page-creation requests. |
 | [`NotionSetup.swift`](Sources/MoveBreak/NotionSetup.swift) | Runs interactive token/database configuration. |
 | [`Keychain.swift`](Sources/MoveBreak/Keychain.swift) | Wraps device-local Keychain storage behind typed errors and a testable backend. |
