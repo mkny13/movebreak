@@ -24,7 +24,8 @@ future-state sequencing in `ROADMAP.md`.
 
 - Compiles `Sources/MoveBreak/*.swift` directly with `swiftc`; there is no Xcode project,
   SwiftPM manifest, or external dependency. CommandLineTools is sufficient.
-- Runs `./build/MoveBreak --self-test`, packages `MoveBreak.app`, and ad-hoc signs it.
+- Runs the agent-context and architecture-inventory checks, compiles the app, runs the
+  complete `./build/MoveBreak --self-test` suite, packages `MoveBreak.app`, and ad-hoc signs it.
 
 To run self-test directly:
 ```bash
@@ -34,7 +35,8 @@ To run self-test directly:
 ## Conventions
 
 - AppKit UI creation must stay on the main thread (see `MainThread.swift` and `FloatingPanel.swift`).
-- Tests belong in `SelfTest.swift` or dedicated CLI flags, invoked by `--self-test`.
+- Add test cases to the owning `*SelfTests.swift` suite. Register new suites in
+  `SelfTest.swift` when necessary, and keep dedicated CLI checks behind explicit flags.
 - Settings persist via `UserDefaults` under `com.mike.movebreak` (see `Preferences.swift`).
 - `build/` and `MoveBreak.app/` are gitignored build artifacts.
 - Update `ARCHITECTURE.md` in the same change when module ownership, runtime data flow,
