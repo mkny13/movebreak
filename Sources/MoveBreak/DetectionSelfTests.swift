@@ -16,8 +16,9 @@ enum DetectionSelfTests {
         let reporter = SelfTestReporter()
 
         let callbackQueue = DispatchQueue(label: "com.mike.movebreak.tests.poll-callback")
+        let workerQueue = DispatchQueue(label: "com.mike.movebreak.tests.poll-worker")
         let scheduler = SerialPollScheduler(
-            queue: DispatchQueue(label: "com.mike.movebreak.tests.poll-worker"),
+            queue: workerQueue,
             completionQueue: callbackQueue
         )
         let countsLock = NSLock()
@@ -25,10 +26,22 @@ enum DetectionSelfTests {
         var activeCount = 0
         var maximumActiveCount = 0
         var acceptedCount = 0
+        var firstReleaseSucceeded = false
+        var pausedReleaseSucceeded = false
+        var ordering: [String] = []
 
         let firstStarted = DispatchSemaphore(value: 0)
         let releaseFirst = DispatchSemaphore(value: 0)
         let firstCompleted = DispatchSemaphore(value: 0)
+        let releasePaused = DispatchSemaphore(value: 0)
+        defer {
+            // A failed assertion must never leave either synthetic inspector blocked.
+            releaseFirst.signal()
+            releasePaused.signal()
+            scheduler.shutdown()
+            workerQueue.sync {}
+            callbackQueue.sync {}
+        }
 
         scheduler.resume()
         let firstScheduled = scheduler.request(
@@ -39,18 +52,29 @@ enum DetectionSelfTests {
                     maximumActiveCount = max(maximumActiveCount, activeCount)
                 }
                 firstStarted.signal()
-                releaseFirst.wait()
-                countsLock.withLock { activeCount -= 1 }
+                let releaseResult = releaseFirst.wait(timeout: .now() + 5)
+                countsLock.withLock {
+                    firstReleaseSucceeded = releaseResult == .success
+                    activeCount -= 1
+                }
                 return 1
             },
             accept: { value in
-                countsLock.withLock { acceptedCount += 1 }
+                countsLock.withLock {
+                    acceptedCount += 1
+                    ordering.append("accepted")
+                }
                 return value
             },
             completion: { _ in firstCompleted.signal() }
         )
         reporter.check("first poll is scheduled", firstScheduled)
-        reporter.check("slow synthetic inspector starts", firstStarted.wait(timeout: .now() + 1) == .success)
+        let firstStartResult = firstStarted.wait(timeout: .now() + 5)
+        reporter.check(
+            "slow synthetic inspector starts",
+            firstStartResult == .success,
+            detail: "inspector start wait timed out"
+        )
 
         let skipped = (0..<100).filter { _ in
             !scheduler.request(inspect: { 99 }, accept: { $0 }, completion: { _ in })
@@ -59,11 +83,33 @@ enum DetectionSelfTests {
         reporter.check("slow ticks never overlap", countsLock.withLock { invocationCount == 1 && maximumActiveCount == 1 })
 
         let mutationRan = DispatchSemaphore(value: 0)
-        scheduler.perform { mutationRan.signal() }
-        reporter.check("detector mutations wait behind an in-flight poll", mutationRan.wait(timeout: .now() + 0.05) == .timedOut)
+        scheduler.perform {
+            countsLock.withLock { ordering.append("mutation") }
+            mutationRan.signal()
+        }
         releaseFirst.signal()
-        reporter.check("accepted poll completes", firstCompleted.wait(timeout: .now() + 1) == .success)
-        reporter.check("queued detector mutation runs after poll", mutationRan.wait(timeout: .now() + 1) == .success)
+        let firstCompletionResult = firstCompleted.wait(timeout: .now() + 5)
+        reporter.check(
+            "accepted poll completes",
+            firstCompletionResult == .success,
+            detail: "completion wait timed out"
+        )
+        let mutationResult = mutationRan.wait(timeout: .now() + 5)
+        reporter.check(
+            "queued detector mutation runs",
+            mutationResult == .success,
+            detail: "worker queue did not drain"
+        )
+        reporter.check(
+            "synthetic inspector is released",
+            countsLock.withLock { firstReleaseSucceeded },
+            detail: "inspector release wait timed out"
+        )
+        reporter.check(
+            "detector mutations wait behind an in-flight poll",
+            countsLock.withLock { ordering == ["accepted", "mutation"] },
+            detail: "observed order: \(countsLock.withLock { ordering })"
+        )
 
         let secondCompleted = DispatchSemaphore(value: 0)
         reporter.check(
@@ -85,27 +131,63 @@ enum DetectionSelfTests {
                 completion: { _ in secondCompleted.signal() }
             )
         )
-        reporter.check("second poll completes", secondCompleted.wait(timeout: .now() + 1) == .success)
+        let secondCompletionResult = secondCompleted.wait(timeout: .now() + 5)
+        reporter.check(
+            "second poll completes",
+            secondCompletionResult == .success,
+            detail: "completion wait timed out"
+        )
 
         let pausedStarted = DispatchSemaphore(value: 0)
-        let releasePaused = DispatchSemaphore(value: 0)
-        let pausedCompleted = DispatchSemaphore(value: 0)
-        _ = scheduler.request(
+        var pausedCompletionCount = 0
+        let pausedScheduled = scheduler.request(
             inspect: {
                 pausedStarted.signal()
-                releasePaused.wait()
+                let releaseResult = releasePaused.wait(timeout: .now() + 5)
+                countsLock.withLock { pausedReleaseSucceeded = releaseResult == .success }
                 return 3
             },
             accept: { value in
                 countsLock.withLock { acceptedCount += 1 }
                 return value
             },
-            completion: { _ in pausedCompleted.signal() }
+            completion: { _ in countsLock.withLock { pausedCompletionCount += 1 } }
         )
-        reporter.check("pre-pause poll starts", pausedStarted.wait(timeout: .now() + 1) == .success)
+        reporter.check("pre-pause poll is scheduled", pausedScheduled)
+        let pausedStartResult = pausedStarted.wait(timeout: .now() + 5)
+        reporter.check(
+            "pre-pause poll starts",
+            pausedStartResult == .success,
+            detail: "inspector start wait timed out"
+        )
         scheduler.pause()
         releasePaused.signal()
-        reporter.check("pause invalidates an in-flight result", pausedCompleted.wait(timeout: .now() + 0.1) == .timedOut)
+        let workerDrained = DispatchSemaphore(value: 0)
+        scheduler.perform { workerDrained.signal() }
+        let workerDrainResult = workerDrained.wait(timeout: .now() + 5)
+        reporter.check(
+            "pre-pause poll drains after release",
+            workerDrainResult == .success,
+            detail: "worker queue barrier timed out"
+        )
+        let callbackDrained = DispatchSemaphore(value: 0)
+        callbackQueue.async { callbackDrained.signal() }
+        let callbackDrainResult = callbackDrained.wait(timeout: .now() + 5)
+        reporter.check(
+            "pre-pause callback queue drains",
+            callbackDrainResult == .success,
+            detail: "callback queue barrier timed out"
+        )
+        reporter.check(
+            "pre-pause synthetic inspector is released",
+            countsLock.withLock { pausedReleaseSucceeded },
+            detail: "inspector release wait timed out"
+        )
+        reporter.check(
+            "pause invalidates an in-flight result",
+            countsLock.withLock { pausedCompletionCount == 0 },
+            detail: "completion count: \(countsLock.withLock { pausedCompletionCount })"
+        )
         reporter.check("pause prevents stale lifecycle acceptance", countsLock.withLock { acceptedCount == 2 })
         reporter.check("paused scheduler rejects ticks", !scheduler.request(inspect: { 4 }, accept: { $0 }, completion: { _ in }))
 
@@ -115,7 +197,12 @@ enum DetectionSelfTests {
             "resume accepts new ticks",
             scheduler.request(inspect: { 5 }, accept: { $0 }, completion: { _ in resumed.signal() })
         )
-        reporter.check("resumed poll completes", resumed.wait(timeout: .now() + 1) == .success)
+        let resumedResult = resumed.wait(timeout: .now() + 5)
+        reporter.check(
+            "resumed poll completes",
+            resumedResult == .success,
+            detail: "completion wait timed out"
+        )
 
         scheduler.shutdown()
         reporter.check("shutdown permanently rejects ticks", !scheduler.request(inspect: { 6 }, accept: { $0 }, completion: { _ in }))
