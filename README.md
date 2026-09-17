@@ -340,48 +340,14 @@ adding the "Sitting at Desk" mode later is a content change rather than a refact
 
 ## Build notes
 
-Compiles with `swiftc` directly rather than SwiftPM. The SwiftPM manifest API in this
-machine's CommandLineTools is broken — `libPackageDescription.dylib` (Jun 8) is out of sync
-with its `.swiftmodule` (Jul 16) and exports none of the expected symbols, so `swift build`
-cannot parse a `Package.swift` at any tools version. `swiftc` itself is fine, and only full
-Xcode (not installed) would provide `.xcodeproj` builds anyway.
+MoveBreak compiles every Swift source directly with `swiftc`; it has no Xcode project,
+SwiftPM manifest, or external dependency. CommandLineTools provides the compiler and system
+frameworks, so full Xcode is not required. The build script runs all CLI self-tests before
+packaging and signing the app.
 
-```
-Sources/MoveBreak/
-  main.swift                  entry point; routes --self-test / --tabs / --diagnose / remote control
-  AppDelegate.swift           menu bar item, polling, wiring
-  AudioActivityMonitor.swift  CoreAudio per-process stream state
-  BundleIdentity.swift        helper process → owning app (see note above)
-  BrowserTabInspector.swift   AppleScript tab query + classification rules
-  SessionDetector.swift       3-stage classify, debounce, session lifecycle
-  FloatingPanel.swift         the NSPanel setup that floats over full-screen Zoom
-  PromptPanel.swift           routine-choice popup (keys 1-9, esc for "Not now")
-  RoutineWindow.swift         checklist window for a session's shuffled routine
-  RoutineBuilderWindow.swift  "Edit Routines…" catalog picker
-  ExerciseCatalog.swift       the full exercise library, Exercise/TreadmillTag/Posture
-  RoutineStore.swift          user-defined routines: persistence, CRUD, default seeds
-  Routines.swift              Routine model + shuffledForSession()
-  Preferences.swift           UserDefaults-backed tuning
-  Diagnose.swift              --diagnose live table
-  TabProbe.swift              --tabs one-shot browser check
-  SelfTest.swift              --self-test suite coordinator and manifest validation
-  SelfTestSupport.swift       shared assertions and scoped test-resource cleanup
-  *SelfTests.swift            focused detection, persistence, security, and update suites
-  RunningAppLookup.swift      pid → bundle id, cached
-  MainThread.swift            onMain() — routes detector callbacks back to the main thread
-  URLDisplay.swift            privacy-preserving URL formatting for console and diagnostics
-  RemoteControl.swift         --show / --toggle-pause / --quit for when the status item
-                               doesn't get a menu bar slot
-  SecretInput.swift           secure interactive terminal secret input with echo suppression
-  Keychain.swift              device-local macOS Keychain wrapper with typed errors
-  NotionSetup.swift           terminal workflow for configuring Notion credentials
-  NotionClient.swift          API client pushing completed sessions to Notion
-  SessionLogger.swift         owner-only (0700/0600) session history and atomic sync queue
-  SessionRecord.swift         session completion data model (Codable)
-```
-
-Full Xcode is **not** needed — `swiftc` and the SwiftUI/AppKit SDKs in CommandLineTools are
-sufficient, and installing Xcode would only restore SwiftPM, which this project doesn't use.
+For the complete current runtime, data flow, threading and security boundaries, and an
+inventory of every source module, see [ARCHITECTURE.md](ARCHITECTURE.md). For ordered future
+work and transitional component ownership, see [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -420,10 +386,13 @@ MoveBreak incorporates a fail-closed automatic update verification pipeline that
 
 ## Integration with Groundwork
 
-MoveBreak is being integrated with [Groundwork](https://github.com/mkny13/groundwork) (rehabilitation and athletic training engine):
-- **Desktop HUD & detection:** MoveBreak retains its low-overhead native macOS CoreAudio meeting/video detection and floating overlay HUD (`FloatingPanel`) over Zoom.
-- **Clinical intelligence & persistence:** MoveBreak replaces its static catalog (`ExerciseCatalog.swift`) and legacy Notion client (`NotionClient.swift`) with Groundwork's dynamic desk-break session generation and Neon Postgres tracking.
-- Tracked in [movebreak#2](https://github.com/mkny13/movebreak/issues/2).
+MoveBreak's Groundwork integration is planned, not shipped. Today, the bundled exercise
+catalog, local routine editor, local history, and optional Notion sync remain active. The
+migration will retain native CoreAudio/browser detection and the floating macOS HUD while
+adding Groundwork-generated routines and durable completion sync in dependency order.
+
+See [ROADMAP.md](ROADMAP.md) for the authoritative current/future boundary and the ordered
+[#2 migration](https://github.com/mkny13/movebreak/issues/2).
 
 ## Automation & Agent Workflows
 
