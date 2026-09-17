@@ -2,6 +2,10 @@ import Darwin
 import Foundation
 
 enum PersistenceSelfTests {
+    private enum SimulatedDeliveryError: Error {
+        case failed
+    }
+
     private final class MockKeychainBackend: KeychainStorageBackend {
         var storage: [String: Data] = [:]
         var simulatedAddError: KeychainError? = nil
@@ -404,6 +408,157 @@ enum PersistenceSelfTests {
         return reporter.failureCount
     }
 
+    // MARK: - Pending Sync Queue Failure Cases
+
+    private static func drain(_ queue: DispatchQueue) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        queue.async { semaphore.signal() }
+        return semaphore.wait(timeout: .now() + 5) == .success
+    }
+
+    private static func runPendingSyncQueueCases() -> Int {
+        let reporter = SelfTestReporter()
+        let routine = Routine(
+            key: "private-health-routine",
+            title: "PRIVATE HEALTH PAYLOAD",
+            subtitle: "Sensitive fixture",
+            estimatedMinutes: 2,
+            exercises: [ExerciseCatalog.all[0]]
+        )
+        let record1 = SessionRecord(routine: routine, checkedIDs: [ExerciseCatalog.all[0].id])
+        let record2 = SessionRecord(routine: routine, checkedIDs: [])
+
+        let missingFixture = SelfTestTemporaryDirectory(prefix: "movebreak-pending-missing")
+        let missingLogger = SessionLogger(supportDir: missingFixture.url)
+        do {
+            reporter.check("Missing pending queue reads as empty", passed: try missingLogger.readPending().isEmpty)
+        } catch {
+            reporter.check("Missing pending queue reads as empty", false, detail: "\(error)")
+        }
+
+        let validFixture = SelfTestTemporaryDirectory(prefix: "movebreak-pending-valid")
+        let validQueue = DispatchQueue(label: "com.mike.movebreak.tests.pending-valid")
+        let failingLogger = SessionLogger(supportDir: validFixture.url, queue: validQueue) { _, completion in
+            completion(.failure(SimulatedDeliveryError.failed))
+        }
+        do {
+            try failingLogger.writePending([record1])
+            failingLogger.logCompletion(record: record1)
+            let duplicateDrained = drain(validQueue) && drain(validQueue)
+            let afterDuplicate = try failingLogger.readPending()
+            reporter.check(
+                "Failed delivery deduplicates an existing pending UUID on the logger queue",
+                passed: duplicateDrained && afterDuplicate.map(\.id) == [record1.id]
+            )
+
+            failingLogger.logCompletion(record: record2)
+            let additionDrained = drain(validQueue) && drain(validQueue)
+            let afterAddition = try failingLogger.readPending()
+            reporter.check(
+                "Failed delivery appends a distinct pending UUID on the logger queue",
+                passed: additionDrained && afterAddition.map(\.id) == [record1.id, record2.id]
+            )
+
+            let retryQueue = DispatchQueue(label: "com.mike.movebreak.tests.pending-retry")
+            let retryLogger = SessionLogger(supportDir: validFixture.url, queue: retryQueue) { record, completion in
+                completion(record.id == record1.id ? .success(()) : .failure(SimulatedDeliveryError.failed))
+            }
+            retryLogger.retryPendingSyncs()
+            let retryDrained = drain(retryQueue) && drain(retryQueue)
+            let afterRetry = try retryLogger.readPending()
+            reporter.check(
+                "Retry removes only successfully delivered UUIDs and keeps failed UUIDs deduplicated",
+                passed: retryDrained && afterRetry.map(\.id) == [record2.id]
+            )
+        } catch {
+            reporter.check("Valid pending queue mutation cases complete", false, detail: "\(error)")
+        }
+
+        let malformedFixture = SelfTestTemporaryDirectory(prefix: "movebreak-pending-malformed")
+        let malformedQueue = DispatchQueue(label: "com.mike.movebreak.tests.pending-malformed")
+        let malformedLogger = SessionLogger(supportDir: malformedFixture.url, queue: malformedQueue) { _, completion in
+            completion(.failure(SimulatedDeliveryError.failed))
+        }
+        let corruptBytes = Data("{CORRUPT_PRIVATE_RECORD_BYTES".utf8)
+        do {
+            try corruptBytes.write(to: malformedLogger.pendingFile)
+            let output = try SelfTestSupport.captureOutput {
+                malformedLogger.retryPendingSyncs()
+                _ = drain(malformedQueue)
+                malformedLogger.logCompletion(record: record1)
+                _ = drain(malformedQueue)
+                _ = drain(malformedQueue)
+            }
+            let preservedBytes = try Data(contentsOf: malformedLogger.pendingFile)
+            reporter.check(
+                "Malformed pending bytes survive retry and later failed-delivery add byte-for-byte",
+                passed: preservedBytes == corruptBytes
+            )
+            reporter.check(
+                "Malformed queue diagnostics identify retry and add without payload data",
+                passed: output.stderr.contains("pending-sync retry aborted; existing queue preserved (malformed data)")
+                    && output.stderr.contains("pending-sync add aborted; existing queue preserved (malformed data)")
+                    && !output.stderr.contains("CORRUPT_PRIVATE_RECORD_BYTES")
+                    && !output.stderr.contains(routine.title),
+                detail: output.stderr
+            )
+        } catch {
+            reporter.check("Malformed pending queue preservation cases complete", false, detail: "\(error)")
+        }
+
+        let unreadableFixture = SelfTestTemporaryDirectory(prefix: "movebreak-pending-unreadable")
+        let unreadableQueue = DispatchQueue(label: "com.mike.movebreak.tests.pending-unreadable")
+        let unreadableLogger = SessionLogger(supportDir: unreadableFixture.url, queue: unreadableQueue) { _, completion in
+            completion(.success(()))
+        }
+        do {
+            try unreadableLogger.writePending([record1, record2])
+            let originalBytes = try Data(contentsOf: unreadableLogger.pendingFile)
+            guard chmod(unreadableLogger.pendingFile.path, 0o000) == 0 else {
+                throw SelfTestInfrastructureError.posix(operation: "make pending queue unreadable", code: errno)
+            }
+            let output = try SelfTestSupport.captureOutput {
+                unreadableLogger.logCompletion(record: record1)
+                _ = drain(unreadableQueue)
+                _ = drain(unreadableQueue)
+            }
+            guard chmod(unreadableLogger.pendingFile.path, 0o600) == 0 else {
+                throw SelfTestInfrastructureError.posix(operation: "restore pending queue permissions", code: errno)
+            }
+            let preservedBytes = try Data(contentsOf: unreadableLogger.pendingFile)
+            let preservedRecords = try unreadableLogger.readPending()
+            reporter.check(
+                "Unreadable pending bytes survive a later successful-delivery remove byte-for-byte",
+                passed: preservedBytes == originalBytes && preservedRecords.map(\.id) == [record1.id, record2.id]
+            )
+            reporter.check(
+                "Unreadable queue remove diagnostic is useful and omits health payload data",
+                passed: output.stderr.contains("pending-sync remove aborted; existing queue preserved (unreadable data)")
+                    && !output.stderr.contains(routine.title),
+                detail: output.stderr
+            )
+        } catch {
+            _ = chmod(unreadableLogger.pendingFile.path, 0o600)
+            reporter.check("Unreadable pending queue preservation cases complete", false, detail: "\(error)")
+        }
+
+        for (name, fixture) in [
+            ("missing pending", missingFixture),
+            ("valid pending", validFixture),
+            ("malformed pending", malformedFixture),
+            ("unreadable pending", unreadableFixture),
+        ] {
+            do {
+                try fixture.cleanup()
+                reporter.check("\(name) temporary directory is removed", true)
+            } catch {
+                reporter.check("\(name) temporary directory is removed", false, detail: "\(error)")
+            }
+        }
+
+        return reporter.failureCount
+    }
+
     // MARK: - SessionLogger Directory & File Permission Cases
 
     private static func runSessionLoggerPermissionCases() -> Int {
@@ -690,6 +845,9 @@ enum PersistenceSelfTests {
         print("")
         print("Local session directory (0700) & file permissions (0600)")
         failures += runSessionLoggerPermissionCases()
+        print("")
+        print("Pending sync queue failure preservation & serialized mutation")
+        failures += runPendingSyncQueueCases()
         print("")
         print("Local session persistence failure observability")
         failures += runPersistenceFailureCases()
