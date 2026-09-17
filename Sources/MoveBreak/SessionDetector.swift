@@ -168,7 +168,6 @@ final class SessionDetector {
 
     /// Performs the potentially slow I/O portion without mutating lifecycle state.
     func inspect() -> Classification {
-        RunningAppLookup.shared.invalidate()
         let active = monitor.activeSnapshot()
         return Self.classify(
             processes: active,

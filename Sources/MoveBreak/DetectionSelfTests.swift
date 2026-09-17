@@ -10,6 +10,37 @@ enum DetectionSelfTests {
         }
     }
 
+    private static func runAudioReadOptimizationCases() -> Int {
+        let reporter = SelfTestReporter()
+        var pidReads = 0, bundleReads = 0, fallbackReads = 0
+        let monitor = AudioActivityMonitor(reader: AudioPropertyReader(
+            objectIDs: { [1, 2, 3] },
+            pid: { id in pidReads += 1; return pid_t(100 + id) },
+            bundleID: { id in bundleReads += 1; return id == 2 ? "com.zoom.us" : nil },
+            runningInput: { $0 == 2 },
+            runningOutput: { $0 == 3 }
+        ), fallbackBundleID: { _, _ in fallbackReads += 1; return "com.apple.Music" })
+        let active = monitor.activeSnapshot()
+        reporter.check("inactive objects skip identity reads", pidReads == 2 && bundleReads == 2)
+        reporter.check("active input and output retain complete identity", active.count == 2 && active[0].isRunningInput && active[1].isRunningOutput)
+        reporter.check("missing active bundle uses fallback only once", fallbackReads == 1 && active[1].bundleID == "com.apple.Music")
+
+        var instant = Date(timeIntervalSince1970: 1_000), resolutions = 0
+        let lookup = RunningAppLookup(lifetime: 5, now: { instant }) { pid in resolutions += 1; return "app.\(pid).\(resolutions)" }
+        _ = lookup.bundleID(forPID: 7, objectID: 70)
+        _ = lookup.bundleID(forPID: 7, objectID: 70)
+        reporter.check("fallback identity is reused across polls", resolutions == 1)
+        lookup.retain(objectIDs: [])
+        _ = lookup.bundleID(forPID: 7, objectID: 70)
+        reporter.check("disappeared object invalidates cached identity", resolutions == 2)
+        instant = instant.addingTimeInterval(6)
+        _ = lookup.bundleID(forPID: 7, objectID: 70)
+        reporter.check("fallback identity expires", resolutions == 3)
+        _ = lookup.bundleID(forPID: 7, objectID: 71)
+        reporter.check("reused PID on another object cannot inherit identity", resolutions == 4)
+        return reporter.failureCount
+    }
+
     // MARK: - Serialized Polling and Lifecycle Cases
 
     private static func runSerializedPollingCases() -> Int {
@@ -496,6 +527,9 @@ enum DetectionSelfTests {
 
     static func run() -> Int {
         var failures = 0
+        print("CoreAudio active-only reads and fallback cache")
+        failures += runAudioReadOptimizationCases()
+        print("")
         print("Serialized polling, pause/resume, and shutdown")
         failures += runSerializedPollingCases()
         print("")
