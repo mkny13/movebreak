@@ -1,12 +1,11 @@
 # Agent instructions — MoveBreak
 
-Shared conventions for any AI tool (Claude Code, Mahler agents, etc.) working in this repo.
-`CLAUDE.md` points here — keep this file as the single source of truth.
+This is the canonical repository instruction file; `CLAUDE.md` must remain the one-line
+`@AGENTS.md` pointer. Keep this file below 4096 bytes so agents do not load product
+documentation on every turn.
 
-## What this is
-
-A macOS menu-bar app (Swift, AppKit + SwiftUI) that detects sedentary sessions (video calls, watched videos) via CoreAudio stream state and browser tab inspection, offering short movement/PT routines in a floating overlay panel.
-Documentation has three sources of truth:
+MoveBreak is a macOS menu-bar app built with Swift, AppKit, and SwiftUI. Detailed
+documentation belongs in these sources of truth:
 
 - [README.md](README.md) for user setup, behavior, tuning, and troubleshooting.
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the shipped runtime, data flow, module ownership,
@@ -14,8 +13,8 @@ Documentation has three sources of truth:
 - [ROADMAP.md](ROADMAP.md) for future work and migration status, including which legacy
   components remain live.
 
-Do not introduce a separate `DESIGN.md`; durable implementation decisions belong in the
-architecture document and future-state sequencing belongs in the roadmap.
+Do not add `DESIGN.md`. Put durable implementation decisions in `ARCHITECTURE.md` and
+future-state sequencing in `ROADMAP.md`.
 
 ## Build and Verify
 
@@ -23,9 +22,9 @@ architecture document and future-state sequencing belongs in the roadmap.
 ./scripts/build_app.sh
 ```
 
-- Compiles `Sources/MoveBreak/*.swift` directly with `swiftc` (no Xcode project, no SwiftPM; CommandLineTools is sufficient).
-- Automatically executes `./build/MoveBreak --self-test` as part of `build_app.sh`.
-- Packages and ad-hoc signs `MoveBreak.app`.
+- Compiles `Sources/MoveBreak/*.swift` directly with `swiftc`; there is no Xcode project,
+  SwiftPM manifest, or external dependency. CommandLineTools is sufficient.
+- Runs `./build/MoveBreak --self-test`, packages `MoveBreak.app`, and ad-hoc signs it.
 
 To run self-test directly:
 ```bash
@@ -34,7 +33,6 @@ To run self-test directly:
 
 ## Conventions
 
-- No Xcode project, no SwiftPM manifest, no external dependencies.
 - AppKit UI creation must stay on the main thread (see `MainThread.swift` and `FloatingPanel.swift`).
 - Tests belong in `SelfTest.swift` or dedicated CLI flags, invoked by `--self-test`.
 - Settings persist via `UserDefaults` under `com.mike.movebreak` (see `Preferences.swift`).
@@ -44,7 +42,11 @@ To run self-test directly:
 - Update `ROADMAP.md` in the same change when shipped/planned status, migration order, or
   the lifetime of a transitional component changes.
 
-## Active Integrations & Direction
+## Integrations and accounts
 
-- **Groundwork Integration**: Tracked in [movebreak#2](https://github.com/mkny13/movebreak/issues/2) and ordered in [ROADMAP.md](ROADMAP.md). Groundwork behavior is planned, not shipped; local static routines, editing, history, and optional Notion sync remain live as documented until their owning migration issues merge.
-- **Account Classification**: This repo is classed as dual-use (`accounts = ["personal", "work"]`). Git hosting operations remain strictly under personal GitHub identity (`mkny13`).
+- Groundwork behavior is planned, not shipped (see
+  [movebreak#2](https://github.com/mkny13/movebreak/issues/2) and [ROADMAP.md](ROADMAP.md)).
+  Local static routines, editing, history, and optional Notion sync remain live until
+  their owning migration issues merge.
+- This repo is dual-use (`accounts = ["personal", "work"]`). Git hosting operations must
+  use the personal GitHub identity `mkny13`.
