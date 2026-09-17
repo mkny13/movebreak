@@ -8,6 +8,20 @@ struct AudioProcess {
     let bundleID: String?
     let isRunningInput: Bool     // holds a live microphone stream
     let isRunningOutput: Bool    // holds a live playback stream
+
+    init(
+        objectID: AudioObjectID = 0,
+        pid: pid_t = 0,
+        bundleID: String?,
+        isRunningInput: Bool = false,
+        isRunningOutput: Bool = false
+    ) {
+        self.objectID = objectID
+        self.pid = pid
+        self.bundleID = bundleID
+        self.isRunningInput = isRunningInput
+        self.isRunningOutput = isRunningOutput
+    }
 }
 
 /// Reads which processes currently hold live audio streams.

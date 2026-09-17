@@ -68,15 +68,36 @@ final class SessionDetector {
 
     private func classify() -> Classification {
         let active = monitor.activeSnapshot()
-        let ignored = Preferences.ignoredApps
-        // All matching goes through BundleIdentity: audio is reported against helper
-        // processes (com.google.Chrome.helper, com.apple.WebKit.GPU, Electron helpers),
-        // so comparing raw bundle IDs to an app list matches nothing.
-        let relevant = active.filter { !BundleIdentity.belongs($0.bundleID, to: ignored) }
+        return Self.classify(
+            processes: active,
+            ignoredApps: Preferences.ignoredApps,
+            meetingApps: Preferences.meetingApps,
+            nativePlayers: Preferences.nativePlayers,
+            browsers: Preferences.browsers,
+            tabInspector: { [tabInspector] bundleID in
+                tabInspector.inspect(bundleID: bundleID)
+            }
+        )
+    }
+
+    /// Pure classification logic extracted from CoreAudio and AppleScript dependencies.
+    /// Evaluates snapshot processes against app sets and invokes `tabInspector` only when
+    /// an active, non-ignored browser holds an output stream.
+    static func classify(
+        processes active: [AudioProcess],
+        ignoredApps: Set<String> = Preferences.ignoredApps,
+        meetingApps: Set<String> = Preferences.meetingApps,
+        nativePlayers: Set<String> = Preferences.nativePlayers,
+        browsers: Set<String> = Preferences.browsers,
+        tabInspector: (String) -> TabInspection
+    ) -> Classification {
+        // Ignored apps are unconditionally excluded before mic, native-player,
+        // and browser stages. Helper-to-owner resolution ensures helper processes
+        // of ignored apps are also excluded.
+        let relevant = active.filter { !BundleIdentity.belongs($0.bundleID, to: ignoredApps) }
 
         // Stage 1 — a live mic stream is unambiguous. No URL inspection needed, and it
         // covers Zoom, Meet, Teams, Slack and FaceTime through one code path.
-        let meetingApps = Preferences.meetingApps
         if let hit = relevant.first(where: {
             $0.isRunningInput && BundleIdentity.belongs($0.bundleID, to: meetingApps)
         }) {
@@ -89,9 +110,8 @@ final class SessionDetector {
         }
 
         // Stage 2 — native players need no disambiguation.
-        let players = Preferences.nativePlayers
         if let hit = relevant.first(where: {
-            $0.isRunningOutput && BundleIdentity.belongs($0.bundleID, to: players)
+            $0.isRunningOutput && BundleIdentity.belongs($0.bundleID, to: nativePlayers)
         }) {
             return Classification(
                 state: .video,
@@ -104,7 +124,6 @@ final class SessionDetector {
         // Stage 3 — browser audio: could be a video, could be Relisten. Ask.
         // Resolve helper -> parent browser, and dedupe: Chrome can have several helper
         // processes holding streams at once, and they all mean the same browser.
-        let browsers = Preferences.browsers
         let playingBrowsers = Set(
             relevant
                 .filter(\.isRunningOutput)
@@ -116,20 +135,20 @@ final class SessionDetector {
 
         var inspections: [TabInspection] = []
         for bundleID in playingBrowsers {
-            let inspection = tabInspector.inspect(bundleID: bundleID)
+            let inspection = tabInspector(bundleID)
             inspections.append(inspection)
             switch inspection.verdict {
             case .meeting(let url):
                 return Classification(
                     state: .meeting,
-                    reason: "\(bundleID): \(inspection.reason) — \(url)",
+                    reason: "\(bundleID): \(inspection.reason) — \(URLDisplay.sanitize(url, verbose: false))",
                     activeProcesses: active,
                     inspections: inspections
                 )
             case .video(let url):
                 return Classification(
                     state: .video,
-                    reason: "\(bundleID): \(inspection.reason) — \(url)",
+                    reason: "\(bundleID): \(inspection.reason) — \(URLDisplay.sanitize(url, verbose: false))",
                     activeProcesses: active,
                     inspections: inspections
                 )

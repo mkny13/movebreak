@@ -6,7 +6,7 @@ import Foundation
 /// Run with:  swift run MoveBreak --diagnose
 enum Diagnose {
 
-    static func run() -> Never {
+    static func run(verbose: Bool = false) -> Never {
         guard AudioActivityMonitor.isSupported else {
             FileHandle.standardError.write(Data("""
             error: this macOS build does not expose kAudioHardwarePropertyProcessObjectList.
@@ -39,7 +39,7 @@ enum Diagnose {
                 print("")
                 print("[\(stamp)] STATE: \(result.state.label.uppercased())  —  \(result.reason)")
                 printProcesses(result.activeProcesses)
-                printInspections(result.inspections)
+                printInspections(result.inspections, verbose: verbose)
                 lastSignature = signature
             } else {
                 // Heartbeat so it's obvious the thing is alive and not wedged.
@@ -94,17 +94,17 @@ enum Diagnose {
         return "not in any list"
     }
 
-    private static func printInspections(_ inspections: [TabInspection]) {
+    private static func printInspections(_ inspections: [TabInspection], verbose: Bool = false) {
         for inspection in inspections {
             print("        ── tab inspection: \(inspection.bundleID)")
             if let error = inspection.scriptError {
                 print("           ⚠︎ \(error)")
             }
-            print("           active tab : \(truncate(inspection.activeTabURL ?? "‹none›"))")
+            print("           active tab : \(truncate(URLDisplay.sanitize(inspection.activeTabURL, verbose: verbose)))")
             if !inspection.allTabURLs.isEmpty {
                 print("           all tabs   : \(inspection.allTabURLs.count) open")
                 for url in inspection.allTabURLs.prefix(8) {
-                    print("                        \(truncate(url))")
+                    print("                        \(truncate(URLDisplay.sanitize(url, verbose: verbose)))")
                 }
                 if inspection.allTabURLs.count > 8 {
                     print("                        … \(inspection.allTabURLs.count - 8) more")
