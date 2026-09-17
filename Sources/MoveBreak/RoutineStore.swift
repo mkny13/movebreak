@@ -20,9 +20,11 @@ final class RoutineStore: ObservableObject {
     }
 
     private static let defaultsKey = "savedRoutines"
+    private let defaults: UserDefaults
 
-    init() {
-        routines = RoutineStore.load() ?? RoutineStore.defaultSeeds
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        routines = RoutineStore.load(from: defaults) ?? RoutineStore.defaultSeeds
     }
 
     // MARK: - CRUD
@@ -97,15 +99,12 @@ final class RoutineStore: ObservableObject {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(routines) else { return }
-        UserDefaults.standard.set(data, forKey: RoutineStore.defaultsKey)
+        defaults.set(data, forKey: RoutineStore.defaultsKey)
     }
 
-    private static func load() -> [SavedRoutine]? {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([SavedRoutine].self, from: data),
-              !decoded.isEmpty
-        else { return nil }
-        return decoded
+    private static func load(from defaults: UserDefaults) -> [SavedRoutine]? {
+        guard let data = defaults.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode([SavedRoutine].self, from: data)
     }
 
     // MARK: - Default seeds
