@@ -212,7 +212,7 @@ final class Updater {
             return .failure(error.localizedDescription)
         }
 
-        let unzipResult = Updater.runCommand(
+        let unzipResult = ProcessRunner.run(
             executable: "/usr/bin/ditto",
             arguments: ["-x", "-k", zipPath.path, stagingDir.path],
             timeout: 60.0
@@ -256,7 +256,7 @@ final class Updater {
         // URLSession-downloaded files carry com.apple.quarantine; the bundle isn't
         // notarized, so Gatekeeper would block it on relaunch unless this is cleared.
         // Clear quarantine ONLY after every signature, digest, and containment check succeeds.
-        let xattrResult = Updater.runCommand(
+        let xattrResult = ProcessRunner.run(
             executable: "/usr/bin/xattr",
             arguments: ["-dr", "com.apple.quarantine", appURL.path],
             timeout: 30.0
@@ -346,81 +346,6 @@ final class Updater {
     }
 
     // MARK: - Helpers
-
-    struct ProcessResult {
-        let exitCode: Int32
-        let timedOut: Bool
-        let stdout: String
-        let stderr: String
-
-        var isSuccess: Bool { !timedOut && exitCode == 0 }
-    }
-
-    static func runCommand(
-        executable: String,
-        arguments: [String],
-        timeout: TimeInterval = 30.0
-    ) -> ProcessResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        var outData = Data()
-        var errData = Data()
-        let pipeQueue = DispatchQueue(label: "com.mike.movebreak.process-pipe")
-
-        stdoutPipe.fileHandleForReading.readabilityHandler = { fh in
-            let d = fh.availableData
-            if !d.isEmpty { pipeQueue.sync { outData.append(d) } }
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { fh in
-            let d = fh.availableData
-            if !d.isEmpty { pipeQueue.sync { errData.append(d) } }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            return ProcessResult(exitCode: -1, timedOut: false, stdout: "", stderr: error.localizedDescription)
-        }
-
-        let sema = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
-            process.waitUntilExit()
-            sema.signal()
-        }
-
-        var timedOut = false
-        if sema.wait(timeout: .now() + timeout) == .timedOut {
-            timedOut = true
-            process.terminate()
-            _ = sema.wait(timeout: .now() + 2.0)
-        }
-
-        stdoutPipe.fileHandleForReading.readabilityHandler = nil
-        stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-        let remainingOut = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let remainingErr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        pipeQueue.sync {
-            outData.append(remainingOut)
-            errData.append(remainingErr)
-        }
-
-        let outStr = String(data: outData, encoding: .utf8) ?? ""
-        let errStr = String(data: errData, encoding: .utf8) ?? ""
-        return ProcessResult(
-            exitCode: process.terminationStatus,
-            timedOut: timedOut,
-            stdout: outStr,
-            stderr: errStr
-        )
-    }
 
     private func log(_ message: String) {
         FileHandle.standardError.write(Data("[Updater] \(message)\n".utf8))
@@ -850,7 +775,7 @@ enum CodeSigningPolicy {
 
     static func verifyStrictCodeSignature(
         at appURL: URL,
-        processRunner: (String, [String], TimeInterval) -> Updater.ProcessResult = Updater.runCommand
+        processRunner: (String, [String], TimeInterval) -> ProcessResult = ProcessRunner.run
     ) throws {
         let result = processRunner("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path], 30.0)
         if result.timedOut {
