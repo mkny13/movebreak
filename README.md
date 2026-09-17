@@ -402,6 +402,18 @@ MoveBreak enforces strict credential boundaries and owner-only local permissions
 - **Startup Hardening:** On initialization, `SessionLogger` tightens existing directory permissions to `0700` and scans contained files to enforce `0600`.
 - **Persistence Observability:** Persistence failures to local storage are observable and surfaced directly to callers as typed errors, preventing silent data loss or premature upload attempts.
 
+### Automatic Update Trust Boundary & Code Signing Policy
+
+MoveBreak incorporates a fail-closed automatic update verification pipeline that prevents attacker-supplied, tampered, or mismatched binaries from replacing or executing within the installed application:
+
+- **Provenance & URL Boundaries:** Only official releases from `mkny13/movebreak` are accepted. The asset name must match `MoveBreak.app.zip` and the download URL must be an HTTPS `github.com` endpoint matching `https://github.com/mkny13/movebreak/releases/download/<tag>/MoveBreak.app.zip`. Release tags are strictly validated to prevent directory traversal or malformed strings.
+- **Release Asset Digest:** The release asset metadata from GitHub must include a parseable `sha256:` digest (64 hex characters). The downloaded archive is verified against this digest prior to extraction; any digest mismatch immediately deletes the staging folder and fails closed.
+- **Isolated Staging & Symlink Containment:** Updates are staged in an app-owned, randomly named directory (`~/Library/Application Support/MoveBreak/Updates/<UUID>/`) with POSIX mode `0700`. The extracted bundle and all internal files are checked to guarantee no symlinks escape the staging directory.
+- **Bundle Identity & Version Validation:** The extracted `Info.plist` is inspected to verify that `CFBundleIdentifier` matches `com.mike.movebreak`, `CFBundleExecutable` exists as an executable regular file, and `CFBundleShortVersionString` matches the release tag.
+- **Strict Code Signing & Signer Continuity:** The candidate bundle undergoes strict code-signature validation (`/usr/bin/codesign --verify --deep --strict`). Signer continuity is enforced by comparing leaf signing certificates: the candidate bundle must match the exact leaf signing certificate of the currently running app (e.g. `MoveBreak Signing`).
+- **Fail-Closed Ad-Hoc Build Behavior:** Local development builds signed ad-hoc (`identity: -`) cannot serve as a trust anchor. Automatic update checks report an actionable message (`automatic installation is disabled: running build is ad-hoc signed (requires "MoveBreak Signing" certificate)`) and refuse to download or stage updates.
+- **Subprocess & Execution Boundaries:** All subprocess operations (`/usr/bin/ditto`, `/usr/bin/codesign`, `/usr/bin/xattr`) use fixed absolute executable paths and argument arrays without shell evaluation, protected by bounded execution timeouts. The quarantine flag (`com.apple.quarantine`) is stripped only after every integrity and certificate check has succeeded, and the existing app remains untouched if any step fails.
+
 ---
 
 ## Integration with Groundwork

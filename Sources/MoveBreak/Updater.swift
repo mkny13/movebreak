@@ -56,13 +56,19 @@ final class Updater {
         performSwapAndRelaunch(from: stagedAppURL)
     }
 
+    private var onCheckFinished: (() -> Void)?
+
     // MARK: - Check
 
     /// Public so a `--check-update-now` debug invocation can trigger it directly instead
     /// of waiting for the timer.
-    func checkForUpdate() {
-        guard !isBusy else { return }
+    func checkForUpdate(completion: (() -> Void)? = nil) {
+        guard !isBusy else {
+            completion?()
+            return
+        }
         isBusy = true
+        onCheckFinished = completion
 
         let runningSignerResult = runningSignerInspector()
         guard case .success(let identity) = runningSignerResult, !identity.isAdHoc, identity.leafCertificateData != nil else {
@@ -135,6 +141,9 @@ final class Updater {
     private func finishCheck(log message: String?) {
         if let message { log(message) }
         isBusy = false
+        let callback = onCheckFinished
+        onCheckFinished = nil
+        callback?()
     }
 
     // MARK: - Stage
@@ -158,6 +167,9 @@ final class Updater {
                     self.log("stage failed: \(message)")
                 }
                 self.isBusy = false
+                let callback = self.onCheckFinished
+                self.onCheckFinished = nil
+                callback?()
             }
         }
     }
