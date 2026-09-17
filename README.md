@@ -136,11 +136,13 @@ Prints hosts only by default since it reads your actual browsing; `--verbose` fo
 
 ```bash
 ./build/MoveBreak --diagnose
+./build/MoveBreak --diagnose --verbose  # full URLs instead of host-level summary
 ```
 
 Prints a live table of every process holding an audio stream (pid · bundle id · in · out),
 the resolved browser tab URLs and which list they matched, and the final verdict. Redraws
-whenever anything observable changes.
+whenever anything observable changes. Host-level summaries are printed by default to preserve
+privacy; pass `--verbose` if full URLs are needed.
 
 Walk through these to confirm real-world behavior:
 
@@ -256,19 +258,41 @@ non-notarized bundles). Remove with `--uninstall`.
 
 ## Tuning
 
-All lists live in `UserDefaults` and override the built-in defaults wholesale:
+All settings live in `UserDefaults` (`com.mike.movebreak`) and override built-in defaults:
 
 ```bash
 defaults write com.mike.movebreak musicPatterns -array \
     "relisten.net" "phish.in" "siriusxm.com" "nugs.net" "archive.org/details"
 
 defaults write com.mike.movebreak promptTimeout -float 45
-defaults delete com.mike.movebreak musicPatterns    # back to defaults
+
+# Reset an individual setting back to its built-in default:
+defaults delete com.mike.movebreak musicPatterns
+
+# Reset all MoveBreak configuration back to factory defaults:
+defaults delete com.mike.movebreak
 ```
 
-Keys: `meetingApps`, `nativePlayers`, `browsers`, `ignoredApps`, `videoPatterns`,
-`musicPatterns`, `pollInterval`, `debouncePolls`, `sessionEndGrace`, `declineCooldown`,
-`timeoutCooldown`, `promptTimeout`, `tabCacheLifetime`. See `Preferences.swift`.
+### Validated Timing & Bounds
+
+User configuration is treated as untrusted input. Non-finite (`NaN`, `±Inf`), negative, non-positive, or out-of-range values are rejected deterministically, falling back to safe documented defaults to prevent tight poll loops, zero debounces, or unbounded suppression:
+
+| Key | Safe Range | Default | Purpose |
+|---|---|---|---|
+| `pollInterval` | `0.5` – `60.0` s | `2.0` s | Audio process list polling interval |
+| `debouncePolls` | `1` – `20` polls | `2` polls | Consecutive matching polls required before state changes |
+| `sessionEndGrace` | `5.0` – `600.0` s | `60.0` s | Idle duration before a session is marked finished |
+| `declineCooldown` | `60.0` – `86400.0` s | `2700.0` s (45m) | Prompt suppression after clicking "Not now" |
+| `timeoutCooldown` | `60.0` – `86400.0` s | `900.0` s (15m) | Prompt suppression after an unanswered prompt timeout |
+| `promptTimeout` | `5.0` – `300.0` s | `30.0` s | Floating prompt countdown duration |
+| `tabCacheLifetime` | `1.0` – `60.0` s | `5.0` s | AppleScript tab read cache TTL |
+
+### List Normalization & Denial-List Rules
+
+- **Deterministic normalization**: Whitespace is trimmed, schemes (`https://`) and leading slashes are stripped, empty entries and oversized items (> 256 characters) are dropped, entries are deduplicated preserving order, and lists are capped at 100 items. If no valid items remain, the setting falls back to its built-in defaults.
+- **URL host boundary matching**: Bare-domain patterns (e.g. `vimeo.com`, `twitch.tv`) match only that host or its subdomains (`www.vimeo.com`, `player.vimeo.com`). Deceptive host suffixes (`evilvimeo.com`, `notvimeo.com`) or host extensions (`vimeo.com.attacker.com`) are rejected. Host-plus-path patterns (`youtube.com/watch`) enforce both the host boundary and path prefix.
+- **Fixed browser allowlist**: Configuring `browsers` is strictly constrained to the fixed internal allowlist with AppleScript dictionary support (`com.google.Chrome`, `com.apple.Safari`, `com.brave.Browser`, `company.thebrowser.Browser`, `com.microsoft.edgemac`). Arbitrary application bundle IDs cannot expand AppleScript targeting.
+- **Ignored-app precedence**: Any process belonging to `ignoredApps` (or its helper processes, such as `com.spotify.client.helper` or `com.apple.WebKit.GPU`) is excluded before mic (Stage 1), native player (Stage 2), and browser tab inspection (Stage 3). Ignored apps never trigger AppleScript tab queries or session prompts.
 
 Behavior worth knowing:
 
@@ -343,6 +367,7 @@ Sources/MoveBreak/
   SelfTest.swift              --self-test cases
   RunningAppLookup.swift      pid → bundle id, cached
   MainThread.swift            onMain() — routes detector callbacks back to the main thread
+  URLDisplay.swift            privacy-preserving URL formatting for console and diagnostics
   RemoteControl.swift         --show / --toggle-pause / --quit for when the status item
                                doesn't get a menu bar slot
 ```

@@ -9,6 +9,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
 
       --diagnose   Print live detection state (audio streams, browser tabs, verdict)
                    instead of launching the app. Use this to validate detection.
+                   Add --verbose for full URLs instead of host-level summary.
       --self-test  Run the video-vs-music classification cases and exit.
       --tabs       Show what your browsers have open and how it would classify.
                    Add --verbose for full URLs instead of hosts.
@@ -58,7 +59,7 @@ if arguments.contains("--tabs") {
 }
 
 if arguments.contains("--diagnose") {
-    Diagnose.run()
+    Diagnose.run(verbose: arguments.contains("--verbose"))
 }
 
 if arguments.contains("--configure-notion") {

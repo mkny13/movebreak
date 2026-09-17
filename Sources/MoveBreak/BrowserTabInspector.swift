@@ -168,18 +168,66 @@ final class BrowserTabInspector {
 
     /// Patterns are matched against `host + path` so the same domain can serve both kinds
     /// of content — `youtube.com/watch` is a video, `music.youtube.com` is not.
+    /// URL host boundaries are strictly enforced: bare-domain patterns match only that
+    /// exact host or its subdomains, preventing deceptive suffixes (e.g. evilvimeo.com
+    /// cannot match vimeo.com).
     static func matches(_ urlString: String, _ patterns: [String]) -> Bool {
-        guard let components = URLComponents(string: urlString),
-              let host = components.host else { return false }
-        let haystack = (host + components.path).lowercased()
-        let bareHost = host.lowercased()
+        guard let components = urlComponents(from: urlString),
+              let rawHost = components.host else { return false }
+        let urlHost = rawHost.lowercased()
+        let urlPath = components.path.lowercased()
 
         return patterns.contains { pattern in
-            let needle = pattern.lowercased()
-            if haystack.contains(needle) { return true }
-            // Allow a bare-domain pattern ("vimeo.com") to match "www.vimeo.com".
-            return !needle.contains("/") && bareHost.hasSuffix(needle)
+            matchesPattern(urlHost: urlHost, urlPath: urlPath, pattern: pattern)
         }
+    }
+
+    private static func urlComponents(from urlString: String) -> URLComponents? {
+        if let comps = URLComponents(string: urlString), comps.host != nil {
+            return comps
+        }
+        return URLComponents(string: "https://" + urlString)
+    }
+
+    static func matchesPattern(urlHost: String, urlPath: String, pattern: String) -> Bool {
+        var p = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let schemeRange = p.range(of: "://") {
+            p = String(p[schemeRange.upperBound...])
+        }
+        while p.hasPrefix("/") {
+            p.removeFirst()
+        }
+        guard !p.isEmpty else { return false }
+
+        let parts = p.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        let patternHost = String(parts[0])
+        let patternPath = parts.count > 1 ? String(parts[1]) : ""
+
+        // Host matching: bare-domain patterns must match exactly or as a subdomain.
+        // e.g. "vimeo.com" matches "vimeo.com" and "www.vimeo.com", but NEVER "evilvimeo.com".
+        let hostMatches = urlHost == patternHost || urlHost.hasSuffix("." + patternHost)
+        guard hostMatches else { return false }
+
+        // Path matching:
+        // If pattern has no path or empty path (e.g. "meet.google.com/"), any path on this host matches.
+        if patternPath.isEmpty {
+            return true
+        }
+
+        let normalizedPatternPath = "/" + patternPath
+        let normalizedURLPath = urlPath.isEmpty ? "/" : urlPath
+
+        if pattern.hasSuffix("/") {
+            return normalizedURLPath == normalizedPatternPath
+                || normalizedURLPath.hasPrefix(normalizedPatternPath.hasSuffix("/") ? normalizedPatternPath : normalizedPatternPath + "/")
+        } else {
+            return normalizedURLPath == normalizedPatternPath
+                || normalizedURLPath.hasPrefix(normalizedPatternPath + "/")
+        }
+    }
+
+    static func isBrowserSupported(bundleID: String) -> Bool {
+        Dialect(bundleID: bundleID) != nil
     }
 
     // MARK: - AppleScript

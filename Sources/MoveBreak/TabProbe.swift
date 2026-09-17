@@ -80,15 +80,7 @@ enum TabProbe {
     }
 
     private static func display(_ url: String?, verbose: Bool) -> String {
-        guard let url, !url.isEmpty else { return "‹none›" }
-        if verbose { return url }
-        // Host + first path segment is enough to judge classification without dumping
-        // the full browsing history into a terminal.
-        guard let components = URLComponents(string: url), let host = components.host else {
-            return "‹unparseable›"
-        }
-        let firstSegment = components.path.split(separator: "/").first.map { "/\($0)" } ?? ""
-        return host + firstSegment + (components.path.split(separator: "/").count > 1 ? "/…" : "")
+        URLDisplay.sanitize(url, verbose: verbose)
     }
 
     private static func describe(_ verdict: TabVerdict) -> String {
