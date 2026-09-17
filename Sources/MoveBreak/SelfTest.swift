@@ -1724,6 +1724,18 @@ enum SelfTest {
             check("validReleaseJSON decode", passed: false)
         }
 
+        let malformedReleaseJSON = """
+        {
+            "tag_name": 120,
+            "assets": "MoveBreak.app.zip"
+        }
+        """
+        let malformedReleaseData = malformedReleaseJSON.data(using: .utf8)!
+        check(
+            "malformed release metadata is rejected during decoding",
+            passed: (try? JSONDecoder().decode(GitHubRelease.self, from: malformedReleaseData)) == nil
+        )
+
         let missingAssetJSON = """
         {
             "tag_name": "v1.2.0",
@@ -1829,6 +1841,36 @@ enum SelfTest {
         check("bundle with internal symlink escaping staging directory rejected", passed: internalSymlinkThrew)
         try? FileManager.default.removeItem(at: escapeSymlink)
 
+        let outsideAppURL = tempFixtureDir.appendingPathComponent("Outside.app", isDirectory: true)
+        let outsideMacOSURL = outsideAppURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try? FileManager.default.createDirectory(at: outsideMacOSURL, withIntermediateDirectories: true)
+        _ = FileManager.default.createFile(
+            atPath: outsideMacOSURL.appendingPathComponent("MoveBreak").path,
+            contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
+            attributes: [.posixPermissions: 0o755]
+        )
+        var outsideAppThrew = false
+        do {
+            try StagingPathValidation.validateContainment(appURL: outsideAppURL, stagingDir: stagingDir)
+        } catch let error as StagingPathError {
+            if case .appEscapesStaging = error { outsideAppThrew = true }
+        } catch {}
+        check("app bundle outside staging directory rejected", passed: outsideAppThrew)
+
+        try? FileManager.default.removeItem(at: execURL)
+        var missingExecutableThrew = false
+        do {
+            try StagingPathValidation.validateContainment(appURL: appBundleDir, stagingDir: stagingDir)
+        } catch let error as StagingPathError {
+            if case .invalidAppStructure = error { missingExecutableThrew = true }
+        } catch {}
+        check("bundle with missing executable rejected as invalid structure", passed: missingExecutableThrew)
+        _ = FileManager.default.createFile(
+            atPath: execURL.path,
+            contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
+            attributes: [.posixPermissions: 0o755]
+        )
+
         // 8. Bundle Metadata & Version Verification
         let plistURL = appBundleDir.appendingPathComponent("Contents/Info.plist")
         func writePlist(bundleID: String, executable: String, version: String) {
@@ -1853,6 +1895,20 @@ enum SelfTest {
             metadataValid = true
         } catch {}
         check("matching bundle metadata (identifier, executable, version) passes", passed: metadataValid)
+
+        try? Data("not a property list".utf8).write(to: plistURL)
+        var malformedPlistThrew = false
+        do {
+            try BundleMetadataValidation.validateBundleMetadata(
+                appURL: appBundleDir,
+                expectedBundleID: "com.mike.movebreak",
+                expectedExecutable: "MoveBreak",
+                releaseTag: "v1.2.0"
+            )
+        } catch let error as BundleMetadataError {
+            if case .unreadableInfoPlist = error { malformedPlistThrew = true }
+        } catch {}
+        check("malformed bundle Info.plist rejected", passed: malformedPlistThrew)
 
         writePlist(bundleID: "com.attacker.fakeapp", executable: "MoveBreak", version: "1.2.0")
         var bundleIDMismatchThrew = false
@@ -1963,6 +2019,39 @@ enum SelfTest {
         check("ad-hoc running app disables automatic updates and fails closed", passed: adhocRunningThrew)
 
         // 10. Strict Code Signature Verification on Real Bundles
+        var strictInvocation: (String, [String], TimeInterval)?
+        var invalidSignatureThrew = false
+        do {
+            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { executable, arguments, timeout in
+                strictInvocation = (executable, arguments, timeout)
+                return ProcessResult(exitCode: 1, timedOut: false, stdout: "", stderr: "invalid signature")
+            }
+        } catch let error as SigningTrustError {
+            if case .candidateSignatureInvalid("invalid signature") = error {
+                invalidSignatureThrew = true
+            }
+        } catch {}
+        check(
+            "strict code-signature failure rejects candidate",
+            passed: invalidSignatureThrew
+                && strictInvocation?.0 == "/usr/bin/codesign"
+                && strictInvocation?.1 == ["--verify", "--deep", "--strict", appBundleDir.path]
+                && strictInvocation?.2 == 30.0
+        )
+
+        var signatureTimeoutThrew = false
+        do {
+            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { _, _, _ in
+                ProcessResult(exitCode: ProcessResult.unavailableExitCode, timedOut: true, stdout: "", stderr: "")
+            }
+        } catch let error as SigningTrustError {
+            if case .candidateSignatureInvalid(let message) = error,
+               message == "codesign verification timed out after 30 seconds" {
+                signatureTimeoutThrew = true
+            }
+        } catch {}
+        check("strict code-signature timeout rejects candidate", passed: signatureTimeoutThrew)
+
         let workspaceAppURL = URL(fileURLWithPath: "MoveBreak.app")
         if FileManager.default.fileExists(atPath: workspaceAppURL.path) {
             let inspected = CodeSigningPolicy.inspect(at: workspaceAppURL)
