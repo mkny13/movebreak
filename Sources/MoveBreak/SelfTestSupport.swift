@@ -12,7 +12,80 @@ struct SelfTestSuite {
     let run: () -> Int
 }
 
+final class SelfTestTemporaryDirectory {
+    let url: URL
+    private var isCleanedUp = false
+
+    init(prefix: String) {
+        url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    func create(permissions: Int? = nil) throws {
+        let attributes = permissions.map { [FileAttributeKey.posixPermissions: $0] }
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: attributes
+        )
+    }
+
+    func cleanup() {
+        guard !isCleanedUp else { return }
+        isCleanedUp = true
+        _ = chmod(url.path, 0o700)
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    deinit {
+        cleanup()
+    }
+}
+
+final class SelfTestReporter {
+    private(set) var failureCount = 0
+
+    func check(_ name: String, _ passed: Bool, detail: String = "") {
+        record(name, passed: passed, details: detail.isEmpty ? [] : [detail])
+    }
+
+    func check(_ name: String, passed: Bool, detail: String = "") {
+        check(name, passed, detail: detail)
+    }
+
+    func check<T: Equatable>(_ name: String, expected: T, actual: T) {
+        check(name, expected == actual, detail: "expected \(expected), got \(actual)")
+    }
+
+    func record(
+        _ name: String,
+        passed: Bool,
+        details: [String] = [],
+        alwaysShowDetails: Bool = false
+    ) {
+        if !passed { failureCount += 1 }
+        print("\(passed ? "✓" : "✗ FAIL")  \(name)")
+        if !passed || alwaysShowDetails {
+            details.forEach { print("      \($0)") }
+        }
+    }
+}
+
 enum SelfTestSupport {
+    static func withStandardInput<T>(from descriptor: Int32, perform: () -> T) -> T? {
+        let savedInput = dup(STDIN_FILENO)
+        guard savedInput >= 0 else { return nil }
+        guard dup2(descriptor, STDIN_FILENO) >= 0 else {
+            close(savedInput)
+            return nil
+        }
+        defer {
+            _ = dup2(savedInput, STDIN_FILENO)
+            close(savedInput)
+        }
+        return perform()
+    }
+
     static func captureOutput(block: () -> Void) -> (stdout: String, stderr: String) {
         var outPipe: [Int32] = [-1, -1]
         var errPipe: [Int32] = [-1, -1]

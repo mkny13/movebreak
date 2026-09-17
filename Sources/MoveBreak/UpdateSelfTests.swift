@@ -5,12 +5,7 @@ enum UpdateSelfTests {
     // MARK: - External Process and Pipe Lifecycle Cases
 
     private static func runProcessRunnerCases() -> Int {
-        var failures = 0
-        func check(_ name: String, _ passed: Bool, detail: String = "") {
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed && !detail.isEmpty { print("      \(detail)") }
-        }
+        let reporter = SelfTestReporter()
 
         let runner = ProcessRunner(
             terminationGracePeriod: 0.15,
@@ -23,7 +18,7 @@ enum UpdateSelfTests {
             arguments: ["-c", "printf 'normal stdout'; printf 'normal stderr' >&2"],
             timeout: 2
         )
-        check(
+        reporter.check(
             "process runner captures normal stdout and stderr",
             normal.isSuccess && normal.stdout == "normal stdout" && normal.stderr == "normal stderr"
         )
@@ -33,7 +28,7 @@ enum UpdateSelfTests {
             arguments: ["-c", "printf 'failure detail' >&2; exit 23"],
             timeout: 2
         )
-        check(
+        reporter.check(
             "process runner preserves nonzero exit and stderr",
             !nonzero.timedOut && nonzero.exitCode == 23 && nonzero.stderr == "failure detail"
         )
@@ -43,7 +38,7 @@ enum UpdateSelfTests {
             arguments: [],
             timeout: 0.1
         )
-        check(
+        reporter.check(
             "missing executable returns structured launch failure",
             !missing.timedOut
                 && missing.exitCode == ProcessResult.unavailableExitCode
@@ -63,7 +58,7 @@ enum UpdateSelfTests {
             arguments: ["-c", noisyCommand],
             timeout: 5
         )
-        check(
+        reporter.check(
             "high-volume stdout and stderr drain without truncation",
             noisy.isSuccess
                 && noisy.stdout.contains("stdout-00000-")
@@ -75,29 +70,27 @@ enum UpdateSelfTests {
             detail: "stdout=\(noisy.stdout.utf8.count) bytes stderr=\(noisy.stderr.utf8.count) bytes"
         )
 
-        let fixtureDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("movebreak-process-runner-\(UUID().uuidString)")
+        let processFixture = SelfTestTemporaryDirectory(prefix: "movebreak-process-runner")
+        defer { processFixture.cleanup() }
+        let fixtureDir = processFixture.url
         let ignoresTermURL = fixtureDir.appendingPathComponent("ignores-term.sh")
         do {
-            try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+            try processFixture.create()
             let script = "#!/bin/sh\ntrap '' TERM\nwhile :; do :; done\n"
             try Data(script.utf8).write(to: ignoresTermURL)
             guard chmod(ignoresTermURL.path, 0o700) == 0 else {
-                check("termination-resistant helper fixture is executable", false)
-                try? FileManager.default.removeItem(at: fixtureDir)
-                return failures
+                reporter.check("termination-resistant helper fixture is executable", false)
+                return reporter.failureCount
             }
         } catch {
-            check("termination-resistant helper fixture is created", false, detail: "\(error)")
-            try? FileManager.default.removeItem(at: fixtureDir)
-            return failures
+            reporter.check("termination-resistant helper fixture is created", false, detail: "\(error)")
+            return reporter.failureCount
         }
-        defer { try? FileManager.default.removeItem(at: fixtureDir) }
 
         let timeoutStart = ProcessInfo.processInfo.systemUptime
         let timedOut = runner.run(executable: ignoresTermURL.path, arguments: [], timeout: 0.1)
         let timeoutDuration = ProcessInfo.processInfo.systemUptime - timeoutStart
-        check(
+        reporter.check(
             "termination-resistant process is force-killed within the bound",
             timedOut.timedOut
                 && timedOut.exitCode == ProcessResult.unavailableExitCode
@@ -125,29 +118,22 @@ enum UpdateSelfTests {
             repeatsPassed = repeatsPassed && repeatedTimeout.timedOut
         }
         let descriptorsAfter = SelfTestSupport.openFileDescriptorCount()
-        check("repeated process runs leave file-descriptor count stable",
+        reporter.check("repeated process runs leave file-descriptor count stable",
               repeatsPassed && descriptorsAfter == descriptorsBefore,
               detail: "before=\(descriptorsBefore), after=\(descriptorsAfter)")
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - Automatic Update Trust Boundary & Verification Cases
 
     private static func runUpdateTrustCases() -> Int {
-        var failures = 0
-        func check(_ name: String, passed: Bool, detail: String = "") {
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed && !detail.isEmpty {
-                print("      \(detail)")
-            }
-        }
+        let reporter = SelfTestReporter()
 
         // 1. Release Tag Validation
         let validTags = ["v1.1", "v1.2.0", "v2.0", "v10.12.3", "v0.1"]
         for tag in validTags {
-            check("valid release tag '\(tag)' accepted", passed: ReleaseValidation.validateTag(tag))
+            reporter.check("valid release tag '\(tag)' accepted", passed: ReleaseValidation.validateTag(tag))
         }
 
         let maliciousTags = [
@@ -169,7 +155,7 @@ enum UpdateSelfTests {
             "v1.2.0#fragment"
         ]
         for tag in maliciousTags {
-            check("malicious/invalid tag '\(tag)' rejected", passed: !ReleaseValidation.validateTag(tag))
+            reporter.check("malicious/invalid tag '\(tag)' rejected", passed: !ReleaseValidation.validateTag(tag))
         }
 
         // 2. Download URL Validation
@@ -178,7 +164,7 @@ enum UpdateSelfTests {
         let expectedAsset = "MoveBreak.app.zip"
 
         let validURL = URL(string: "https://github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip")!
-        check(
+        reporter.check(
             "valid release asset HTTPS URL accepted",
             passed: ReleaseValidation.validateDownloadURL(url: validURL, repo: expectedRepo, tag: expectedTag, assetName: expectedAsset)
         )
@@ -199,12 +185,12 @@ enum UpdateSelfTests {
         ]
         for (rawURL, label) in invalidURLs {
             let url = URL(string: rawURL)!
-            check(label, passed: !ReleaseValidation.validateDownloadURL(url: url, repo: expectedRepo, tag: expectedTag, assetName: expectedAsset))
+            reporter.check(label, passed: !ReleaseValidation.validateDownloadURL(url: url, repo: expectedRepo, tag: expectedTag, assetName: expectedAsset))
         }
 
         // 3. Digest Parsing
         let validHex = "f8cbaae40ff571b5cf019035e90a601ea90efa3f3c6643a10b0726277dbd19a9"
-        check(
+        reporter.check(
             "valid sha256: digest parsed and lowercased",
             passed: ReleaseValidation.parseDigest("sha256:\(validHex.uppercased())") == validHex
         )
@@ -221,7 +207,7 @@ enum UpdateSelfTests {
             validHex
         ]
         for (idx, raw) in invalidDigests.enumerated() {
-            check("invalid digest format [\(idx)] rejected", passed: ReleaseValidation.parseDigest(raw) == nil)
+            reporter.check("invalid digest format [\(idx)] rejected", passed: ReleaseValidation.parseDigest(raw) == nil)
         }
 
         // 4. Release Validation Helper (End-to-end Release JSON)
@@ -245,7 +231,7 @@ enum UpdateSelfTests {
                 assetName: expectedAsset,
                 currentVersion: "1.1.0"
             )
-            check("valid release metadata produces ReleaseCandidate", passed: candidate != nil && candidate?.tagName == "v1.2.0")
+            reporter.check("valid release metadata produces ReleaseCandidate", passed: candidate != nil && candidate?.tagName == "v1.2.0")
 
             var notNewerThrew = false
             do {
@@ -258,9 +244,9 @@ enum UpdateSelfTests {
             } catch let err as ReleaseValidationError {
                 if case .notNewer = err { notNewerThrew = true }
             } catch {}
-            check("older or equal release version rejected", passed: notNewerThrew)
+            reporter.check("older or equal release version rejected", passed: notNewerThrew)
         } else {
-            check("validReleaseJSON decode", passed: false)
+            reporter.check("validReleaseJSON decode", passed: false)
         }
 
         let malformedReleaseJSON = """
@@ -270,7 +256,7 @@ enum UpdateSelfTests {
         }
         """
         let malformedReleaseData = malformedReleaseJSON.data(using: .utf8)!
-        check(
+        reporter.check(
             "malformed release metadata is rejected during decoding",
             passed: (try? JSONDecoder().decode(GitHubRelease.self, from: malformedReleaseData)) == nil
         )
@@ -300,14 +286,14 @@ enum UpdateSelfTests {
             } catch let err as ReleaseValidationError {
                 if case .missingAsset = err { missingAssetThrew = true }
             } catch {}
-            check("missing MoveBreak.app.zip asset rejected", passed: missingAssetThrew)
+            reporter.check("missing MoveBreak.app.zip asset rejected", passed: missingAssetThrew)
         }
 
         // 5. Archive SHA-256 Digest Verification & Tampering
-        let tempFixtureDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("movebreak-update-test-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempFixtureDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempFixtureDir) }
+        let updateFixture = SelfTestTemporaryDirectory(prefix: "movebreak-update-test")
+        defer { updateFixture.cleanup() }
+        let tempFixtureDir = updateFixture.url
+        try? updateFixture.create()
 
         let sampleArchiveURL = tempFixtureDir.appendingPathComponent("test.zip")
         let testPayload = Data("MoveBreakSecurePayloadData123456789".utf8)
@@ -319,7 +305,7 @@ enum UpdateSelfTests {
                 try ArchiveDigestValidation.verifyArchive(at: sampleArchiveURL, expectedHexDigest: computedHex)
                 verifyPassed = true
             } catch {}
-            check("archive SHA-256 computation and matching verification succeed", passed: verifyPassed)
+            reporter.check("archive SHA-256 computation and matching verification succeed", passed: verifyPassed)
 
             var mismatchThrew = false
             let wrongHex = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -328,9 +314,9 @@ enum UpdateSelfTests {
             } catch let err as ArchiveDigestError {
                 if case .digestMismatch = err { mismatchThrew = true }
             } catch {}
-            check("tampered archive / mismatched SHA-256 digest rejected before swap", passed: mismatchThrew)
+            reporter.check("tampered archive / mismatched SHA-256 digest rejected before swap", passed: mismatchThrew)
         } else {
-            check("computeSHA256 succeeded", passed: false)
+            reporter.check("computeSHA256 succeeded", passed: false)
         }
 
         // 6. Staging Directory Permissions (0700)
@@ -338,9 +324,9 @@ enum UpdateSelfTests {
         do {
             try StagingPathValidation.ensureSecureDirectory(at: stagingDir)
             let mode = SelfTestSupport.posixMode(at: stagingDir.path)
-            check("staging directory enforced with mode 0700", passed: mode == 0o700, detail: "got \(String(format: "%o", mode ?? 0))")
+            reporter.check("staging directory enforced with mode 0700", passed: mode == 0o700, detail: "got \(String(format: "%o", mode ?? 0))")
         } catch {
-            check("ensureSecureDirectory threw", passed: false, detail: "\(error)")
+            reporter.check("ensureSecureDirectory threw", passed: false, detail: "\(error)")
         }
 
         // 7. Staging Containment & Symlink Defense
@@ -355,7 +341,7 @@ enum UpdateSelfTests {
             try StagingPathValidation.validateContainment(appURL: appBundleDir, stagingDir: stagingDir)
             validContainment = true
         } catch {}
-        check("valid app bundle inside staging directory passes containment", passed: validContainment)
+        reporter.check("valid app bundle inside staging directory passes containment", passed: validContainment)
 
         let symlinkAppURL = stagingDir.appendingPathComponent("SymlinkEscape.app")
         try? FileManager.default.createSymbolicLink(at: symlinkAppURL, withDestinationURL: URL(fileURLWithPath: "/Applications"))
@@ -365,7 +351,7 @@ enum UpdateSelfTests {
         } catch let err as StagingPathError {
             if case .appIsSymlink = err { symlinkAppThrew = true }
         } catch {}
-        check("symlinked app bundle pointing outside staging rejected", passed: symlinkAppThrew)
+        reporter.check("symlinked app bundle pointing outside staging rejected", passed: symlinkAppThrew)
 
         let escapeSymlink = appBundleDir.appendingPathComponent("Contents/Resources/escape_link")
         let resourcesDir = appBundleDir.appendingPathComponent("Contents/Resources", isDirectory: true)
@@ -377,7 +363,7 @@ enum UpdateSelfTests {
         } catch let err as StagingPathError {
             if case .internalSymlinkEscapes = err { internalSymlinkThrew = true }
         } catch {}
-        check("bundle with internal symlink escaping staging directory rejected", passed: internalSymlinkThrew)
+        reporter.check("bundle with internal symlink escaping staging directory rejected", passed: internalSymlinkThrew)
         try? FileManager.default.removeItem(at: escapeSymlink)
 
         let outsideAppURL = tempFixtureDir.appendingPathComponent("Outside.app", isDirectory: true)
@@ -394,7 +380,7 @@ enum UpdateSelfTests {
         } catch let error as StagingPathError {
             if case .appEscapesStaging = error { outsideAppThrew = true }
         } catch {}
-        check("app bundle outside staging directory rejected", passed: outsideAppThrew)
+        reporter.check("app bundle outside staging directory rejected", passed: outsideAppThrew)
 
         try? FileManager.default.removeItem(at: execURL)
         var missingExecutableThrew = false
@@ -403,7 +389,7 @@ enum UpdateSelfTests {
         } catch let error as StagingPathError {
             if case .invalidAppStructure = error { missingExecutableThrew = true }
         } catch {}
-        check("bundle with missing executable rejected as invalid structure", passed: missingExecutableThrew)
+        reporter.check("bundle with missing executable rejected as invalid structure", passed: missingExecutableThrew)
         _ = FileManager.default.createFile(
             atPath: execURL.path,
             contents: Data([0xCF, 0xFA, 0xED, 0xFE]),
@@ -433,7 +419,7 @@ enum UpdateSelfTests {
             )
             metadataValid = true
         } catch {}
-        check("matching bundle metadata (identifier, executable, version) passes", passed: metadataValid)
+        reporter.check("matching bundle metadata (identifier, executable, version) passes", passed: metadataValid)
 
         try? Data("not a property list".utf8).write(to: plistURL)
         var malformedPlistThrew = false
@@ -447,7 +433,7 @@ enum UpdateSelfTests {
         } catch let error as BundleMetadataError {
             if case .unreadableInfoPlist = error { malformedPlistThrew = true }
         } catch {}
-        check("malformed bundle Info.plist rejected", passed: malformedPlistThrew)
+        reporter.check("malformed bundle Info.plist rejected", passed: malformedPlistThrew)
 
         writePlist(bundleID: "com.attacker.fakeapp", executable: "MoveBreak", version: "1.2.0")
         var bundleIDMismatchThrew = false
@@ -461,7 +447,7 @@ enum UpdateSelfTests {
         } catch let err as BundleMetadataError {
             if case .bundleIdentifierMismatch = err { bundleIDMismatchThrew = true }
         } catch {}
-        check("mismatched bundle identifier rejected", passed: bundleIDMismatchThrew)
+        reporter.check("mismatched bundle identifier rejected", passed: bundleIDMismatchThrew)
 
         writePlist(bundleID: "com.mike.movebreak", executable: "WrongExecutable", version: "1.2.0")
         var executableMismatchThrew = false
@@ -475,7 +461,7 @@ enum UpdateSelfTests {
         } catch let err as BundleMetadataError {
             if case .executableNameMismatch = err { executableMismatchThrew = true }
         } catch {}
-        check("mismatched executable name rejected", passed: executableMismatchThrew)
+        reporter.check("mismatched executable name rejected", passed: executableMismatchThrew)
 
         writePlist(bundleID: "com.mike.movebreak", executable: "MoveBreak", version: "1.1.0")
         var versionMismatchThrew = false
@@ -489,7 +475,7 @@ enum UpdateSelfTests {
         } catch let err as BundleMetadataError {
             if case .versionMismatch = err { versionMismatchThrew = true }
         } catch {}
-        check("mismatched bundle version against release tag rejected", passed: versionMismatchThrew)
+        reporter.check("mismatched bundle version against release tag rejected", passed: versionMismatchThrew)
 
         // 9. Code Signing Policy & Leaf Certificate Verification
         let certBytesA = Data([0x30, 0x82, 0x01, 0x0A, 0x02, 0x01, 0x01])
@@ -531,7 +517,7 @@ enum UpdateSelfTests {
             try CodeSigningPolicy.verifySignerContinuity(running: validRunningIdentity, candidate: matchingCandidateIdentity)
             certMatchPassed = true
         } catch {}
-        check("matching leaf signing certificate accepted", passed: certMatchPassed)
+        reporter.check("matching leaf signing certificate accepted", passed: certMatchPassed)
 
         var differentCertThrew = false
         do {
@@ -539,7 +525,7 @@ enum UpdateSelfTests {
         } catch let err as SigningTrustError {
             if case .certificateMismatch = err { differentCertThrew = true }
         } catch {}
-        check("differently signed candidate bundle rejected before swap", passed: differentCertThrew)
+        reporter.check("differently signed candidate bundle rejected before swap", passed: differentCertThrew)
 
         var adhocCandidateThrew = false
         do {
@@ -547,7 +533,7 @@ enum UpdateSelfTests {
         } catch let err as SigningTrustError {
             if case .candidateAdHoc = err { adhocCandidateThrew = true }
         } catch {}
-        check("ad-hoc candidate bundle rejected before swap", passed: adhocCandidateThrew)
+        reporter.check("ad-hoc candidate bundle rejected before swap", passed: adhocCandidateThrew)
 
         var adhocRunningThrew = false
         do {
@@ -555,7 +541,7 @@ enum UpdateSelfTests {
         } catch let err as SigningTrustError {
             if case .runningAppAdHoc = err { adhocRunningThrew = true }
         } catch {}
-        check("ad-hoc running app disables automatic updates and fails closed", passed: adhocRunningThrew)
+        reporter.check("ad-hoc running app disables automatic updates and fails closed", passed: adhocRunningThrew)
 
         // 10. Strict Code Signature Verification on Real Bundles
         var strictInvocation: (String, [String], TimeInterval)?
@@ -570,7 +556,7 @@ enum UpdateSelfTests {
                 invalidSignatureThrew = true
             }
         } catch {}
-        check(
+        reporter.check(
             "strict code-signature failure rejects candidate",
             passed: invalidSignatureThrew
                 && strictInvocation?.0 == "/usr/bin/codesign"
@@ -589,15 +575,15 @@ enum UpdateSelfTests {
                 signatureTimeoutThrew = true
             }
         } catch {}
-        check("strict code-signature timeout rejects candidate", passed: signatureTimeoutThrew)
+        reporter.check("strict code-signature timeout rejects candidate", passed: signatureTimeoutThrew)
 
         let workspaceAppURL = URL(fileURLWithPath: "MoveBreak.app")
         if FileManager.default.fileExists(atPath: workspaceAppURL.path) {
             let inspected = CodeSigningPolicy.inspect(at: workspaceAppURL)
             if case .success(let identity) = inspected {
-                check("workspace MoveBreak.app inspected accurately as ad-hoc signed", passed: identity.isAdHoc)
+                reporter.check("workspace MoveBreak.app inspected accurately as ad-hoc signed", passed: identity.isAdHoc)
             } else {
-                check("workspace MoveBreak.app inspected", passed: false)
+                reporter.check("workspace MoveBreak.app inspected", passed: false)
             }
 
             var strictVerifyPassed = false
@@ -605,10 +591,10 @@ enum UpdateSelfTests {
                 try CodeSigningPolicy.verifyStrictCodeSignature(at: workspaceAppURL)
                 strictVerifyPassed = true
             } catch {}
-            check("strict code signature verification succeeds on un-tampered bundle", passed: strictVerifyPassed)
+            reporter.check("strict code signature verification succeeds on un-tampered bundle", passed: strictVerifyPassed)
         }
 
-        return failures
+        return reporter.failureCount
     }
 
 

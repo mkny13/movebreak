@@ -364,7 +364,9 @@ Sources/MoveBreak/
   Preferences.swift           UserDefaults-backed tuning
   Diagnose.swift              --diagnose live table
   TabProbe.swift              --tabs one-shot browser check
-  SelfTest.swift              --self-test cases
+  SelfTest.swift              --self-test suite coordinator and manifest validation
+  SelfTestSupport.swift       shared assertions and scoped test-resource cleanup
+  *SelfTests.swift            focused detection, persistence, security, and update suites
   RunningAppLookup.swift      pid → bundle id, cached
   MainThread.swift            onMain() — routes detector callbacks back to the main thread
   URLDisplay.swift            privacy-preserving URL formatting for console and diagnostics

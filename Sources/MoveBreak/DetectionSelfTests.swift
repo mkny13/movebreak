@@ -13,11 +13,7 @@ enum DetectionSelfTests {
     // MARK: - Serialized Polling and Lifecycle Cases
 
     private static func runSerializedPollingCases() -> Int {
-        var failures = 0
-        func check(_ name: String, _ passed: Bool) {
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-        }
+        let reporter = SelfTestReporter()
 
         let callbackQueue = DispatchQueue(label: "com.mike.movebreak.tests.poll-callback")
         let scheduler = SerialPollScheduler(
@@ -53,24 +49,24 @@ enum DetectionSelfTests {
             },
             completion: { _ in firstCompleted.signal() }
         )
-        check("first poll is scheduled", firstScheduled)
-        check("slow synthetic inspector starts", firstStarted.wait(timeout: .now() + 1) == .success)
+        reporter.check("first poll is scheduled", firstScheduled)
+        reporter.check("slow synthetic inspector starts", firstStarted.wait(timeout: .now() + 1) == .success)
 
         let skipped = (0..<100).filter { _ in
             !scheduler.request(inspect: { 99 }, accept: { $0 }, completion: { _ in })
         }.count
-        check("ticks are skipped while a poll is in flight", skipped == 100)
-        check("slow ticks never overlap", countsLock.withLock { invocationCount == 1 && maximumActiveCount == 1 })
+        reporter.check("ticks are skipped while a poll is in flight", skipped == 100)
+        reporter.check("slow ticks never overlap", countsLock.withLock { invocationCount == 1 && maximumActiveCount == 1 })
 
         let mutationRan = DispatchSemaphore(value: 0)
         scheduler.perform { mutationRan.signal() }
-        check("detector mutations wait behind an in-flight poll", mutationRan.wait(timeout: .now() + 0.05) == .timedOut)
+        reporter.check("detector mutations wait behind an in-flight poll", mutationRan.wait(timeout: .now() + 0.05) == .timedOut)
         releaseFirst.signal()
-        check("accepted poll completes", firstCompleted.wait(timeout: .now() + 1) == .success)
-        check("queued detector mutation runs after poll", mutationRan.wait(timeout: .now() + 1) == .success)
+        reporter.check("accepted poll completes", firstCompleted.wait(timeout: .now() + 1) == .success)
+        reporter.check("queued detector mutation runs after poll", mutationRan.wait(timeout: .now() + 1) == .success)
 
         let secondCompleted = DispatchSemaphore(value: 0)
-        check(
+        reporter.check(
             "polling re-arms after completion",
             scheduler.request(
                 inspect: {
@@ -89,7 +85,7 @@ enum DetectionSelfTests {
                 completion: { _ in secondCompleted.signal() }
             )
         )
-        check("second poll completes", secondCompleted.wait(timeout: .now() + 1) == .success)
+        reporter.check("second poll completes", secondCompleted.wait(timeout: .now() + 1) == .success)
 
         let pausedStarted = DispatchSemaphore(value: 0)
         let releasePaused = DispatchSemaphore(value: 0)
@@ -106,32 +102,28 @@ enum DetectionSelfTests {
             },
             completion: { _ in pausedCompleted.signal() }
         )
-        check("pre-pause poll starts", pausedStarted.wait(timeout: .now() + 1) == .success)
+        reporter.check("pre-pause poll starts", pausedStarted.wait(timeout: .now() + 1) == .success)
         scheduler.pause()
         releasePaused.signal()
-        check("pause invalidates an in-flight result", pausedCompleted.wait(timeout: .now() + 0.1) == .timedOut)
-        check("pause prevents stale lifecycle acceptance", countsLock.withLock { acceptedCount == 2 })
-        check("paused scheduler rejects ticks", !scheduler.request(inspect: { 4 }, accept: { $0 }, completion: { _ in }))
+        reporter.check("pause invalidates an in-flight result", pausedCompleted.wait(timeout: .now() + 0.1) == .timedOut)
+        reporter.check("pause prevents stale lifecycle acceptance", countsLock.withLock { acceptedCount == 2 })
+        reporter.check("paused scheduler rejects ticks", !scheduler.request(inspect: { 4 }, accept: { $0 }, completion: { _ in }))
 
         scheduler.resume()
         let resumed = DispatchSemaphore(value: 0)
-        check(
+        reporter.check(
             "resume accepts new ticks",
             scheduler.request(inspect: { 5 }, accept: { $0 }, completion: { _ in resumed.signal() })
         )
-        check("resumed poll completes", resumed.wait(timeout: .now() + 1) == .success)
+        reporter.check("resumed poll completes", resumed.wait(timeout: .now() + 1) == .success)
 
         scheduler.shutdown()
-        check("shutdown permanently rejects ticks", !scheduler.request(inspect: { 6 }, accept: { $0 }, completion: { _ in }))
-        return failures
+        reporter.check("shutdown permanently rejects ticks", !scheduler.request(inspect: { 6 }, accept: { $0 }, completion: { _ in }))
+        return reporter.failureCount
     }
 
     private static func runSessionLifecycleCases() -> Int {
-        var failures = 0
-        func check(_ name: String, _ passed: Bool) {
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-        }
+        let reporter = SelfTestReporter()
 
         let configuration = SessionLifecycle.Configuration(
             debouncePolls: 2,
@@ -142,24 +134,24 @@ enum DetectionSelfTests {
         let clock = TestClock()
         var lifecycle = SessionLifecycle(configuration: configuration) { clock.current }
 
-        check("first active sample is debounced", lifecycle.observe(.meeting) == nil && lifecycle.state == .idle)
-        check("second active sample starts and prompts session", lifecycle.observe(.meeting) == .meeting && lifecycle.sessionID == 1)
-        check("stable active state does not prompt twice", lifecycle.observe(.meeting) == nil)
-        check("meeting-to-video candidate is debounced", lifecycle.observe(.video) == nil && lifecycle.state == .meeting)
-        check("meeting-to-video stays one continuous session", lifecycle.observe(.video) == nil && lifecycle.state == .video && lifecycle.sessionID == 1)
+        reporter.check("first active sample is debounced", lifecycle.observe(.meeting) == nil && lifecycle.state == .idle)
+        reporter.check("second active sample starts and prompts session", lifecycle.observe(.meeting) == .meeting && lifecycle.sessionID == 1)
+        reporter.check("stable active state does not prompt twice", lifecycle.observe(.meeting) == nil)
+        reporter.check("meeting-to-video candidate is debounced", lifecycle.observe(.video) == nil && lifecycle.state == .meeting)
+        reporter.check("meeting-to-video stays one continuous session", lifecycle.observe(.video) == nil && lifecycle.state == .video && lifecycle.sessionID == 1)
 
         _ = lifecycle.observe(.idle)
         _ = lifecycle.observe(.idle)
         clock.advance(5)
         _ = lifecycle.observe(.meeting)
-        check("activity returning inside idle grace does not re-prompt", lifecycle.observe(.meeting) == nil && lifecycle.sessionID == 1)
+        reporter.check("activity returning inside idle grace does not re-prompt", lifecycle.observe(.meeting) == nil && lifecycle.sessionID == 1)
 
         _ = lifecycle.observe(.idle)
         _ = lifecycle.observe(.idle)
         clock.advance(11)
         _ = lifecycle.observe(.idle)
         _ = lifecycle.observe(.meeting)
-        check("activity after idle grace starts a new session", lifecycle.observe(.meeting) == .meeting && lifecycle.sessionID == 2)
+        reporter.check("activity after idle grace starts a new session", lifecycle.observe(.meeting) == .meeting && lifecycle.sessionID == 2)
 
         lifecycle.recordDecline()
         _ = lifecycle.observe(.idle)
@@ -167,25 +159,25 @@ enum DetectionSelfTests {
         clock.advance(11)
         _ = lifecycle.observe(.idle)
         _ = lifecycle.observe(.meeting)
-        check("decline cooldown suppresses a new session", lifecycle.observe(.meeting) == nil && lifecycle.sessionID == 3)
+        reporter.check("decline cooldown suppresses a new session", lifecycle.observe(.meeting) == nil && lifecycle.sessionID == 3)
         clock.advance(20)
-        check("active session prompts when decline cooldown expires", lifecycle.observe(.meeting) == .meeting)
+        reporter.check("active session prompts when decline cooldown expires", lifecycle.observe(.meeting) == .meeting)
 
         let timeoutClock = TestClock()
         var timeoutLifecycle = SessionLifecycle(configuration: configuration) { timeoutClock.current }
         _ = timeoutLifecycle.observe(.video)
-        check("video session initially prompts", timeoutLifecycle.observe(.video) == .video)
+        reporter.check("video session initially prompts", timeoutLifecycle.observe(.video) == .video)
         timeoutLifecycle.recordTimeout()
         _ = timeoutLifecycle.observe(.idle)
         _ = timeoutLifecycle.observe(.idle)
         timeoutClock.advance(11)
         _ = timeoutLifecycle.observe(.idle)
         _ = timeoutLifecycle.observe(.video)
-        check("timeout cooldown suppresses a new session", timeoutLifecycle.observe(.video) == nil)
+        reporter.check("timeout cooldown suppresses a new session", timeoutLifecycle.observe(.video) == nil)
         timeoutClock.advance(5)
-        check("active session prompts when timeout cooldown expires", timeoutLifecycle.observe(.video) == .video)
+        reporter.check("active session prompts when timeout cooldown expires", timeoutLifecycle.observe(.video) == .video)
 
-        return failures
+        return reporter.failureCount
     }
 
     /// Guards the bug that made stage 3 silently dead: audio is reported against helper
@@ -209,17 +201,17 @@ enum DetectionSelfTests {
             ("com.google.ChromeSomethingElse",     browsers, nil),  // must not prefix-match
         ]
 
-        var failures = 0
+        let reporter = SelfTestReporter()
         for testCase in cases {
             let actual = BundleIdentity.owner(of: testCase.process, in: testCase.set)
             let passed = actual == testCase.expected
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(testCase.process)")
-            if !passed {
-                print("      expected \(testCase.expected ?? "no match"), got \(actual ?? "no match")")
-            }
+            reporter.check(
+                testCase.process,
+                passed,
+                detail: "expected \(testCase.expected ?? "no match"), got \(actual ?? "no match")"
+            )
         }
-        return failures
+        return reporter.failureCount
     }
 
     private struct Case {
@@ -244,31 +236,29 @@ enum DetectionSelfTests {
     /// referencing a name that doesn't match anything in the catalog (it would just
     /// vanish from "Do PT" etc. with no error).
     private static func runCatalogCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
 
         var seen: Set<String> = []
         for exercise in ExerciseCatalog.all {
             if seen.contains(exercise.id) {
-                failures += 1
-                print("✗ FAIL  duplicate catalog id \"\(exercise.id)\" (from \"\(exercise.name)\")")
+                reporter.check("duplicate catalog id \"\(exercise.id)\" (from \"\(exercise.name)\")", false)
             }
             seen.insert(exercise.id)
         }
-        if failures == 0 {
-            print("✓  \(ExerciseCatalog.all.count) catalog exercises, all ids unique")
+        if reporter.failureCount == 0 {
+            reporter.check("\(ExerciseCatalog.all.count) catalog exercises, all ids unique", true)
         }
 
         for seed in RoutineStore.defaultSeeds {
             let missing = seed.exerciseIDs.filter { ExerciseCatalog.exercise(id: $0) == nil }
-            if missing.isEmpty {
-                print("✓  seed \"\(seed.name)\" resolves all \(seed.exerciseIDs.count) picks")
-            } else {
-                failures += 1
-                print("✗ FAIL  seed \"\(seed.name)\" has ids missing from the catalog: \(missing)")
-            }
+            reporter.check(
+                "seed \"\(seed.name)\" resolves all \(seed.exerciseIDs.count) picks",
+                missing.isEmpty,
+                detail: "missing catalog ids: \(missing)"
+            )
         }
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - Numeric Preferences Regression Cases
@@ -390,27 +380,30 @@ enum DetectionSelfTests {
                  allURLs: ["https://mail.google.com/"]),
         ]
 
-        var failures = 0
+        let reporter = SelfTestReporter()
         for testCase in cases {
             let (verdict, reason) = BrowserTabInspector.classify(
                 activeURL: testCase.activeURL, allURLs: testCase.allURLs
             )
             let passed = verdict.isVideo == testCase.expectVideo
                 && verdict.isMeeting == testCase.expectMeeting
-            if !passed { failures += 1 }
-
             func label(video: Bool, meeting: Bool) -> String {
                 if meeting { return "MEETING" }
                 if video { return "VIDEO" }
                 return "no prompt"
             }
 
-            let mark = passed ? "✓" : "✗ FAIL"
-            print("\(mark)  \(testCase.name)")
-            print("      expected \(label(video: testCase.expectVideo, meeting: testCase.expectMeeting))"
-                  + ", got \(label(video: verdict.isVideo, meeting: verdict.isMeeting)) — \(reason)")
+            reporter.record(
+                testCase.name,
+                passed: passed,
+                details: [
+                    "expected \(label(video: testCase.expectVideo, meeting: testCase.expectMeeting)), "
+                        + "got \(label(video: verdict.isVideo, meeting: verdict.isMeeting)) — \(reason)"
+                ],
+                alwaysShowDetails: true
+            )
         }
-        return failures
+        return reporter.failureCount
     }
 
 

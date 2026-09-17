@@ -3,146 +3,128 @@ import Foundation
 
 enum SecuritySelfTests {
     private static func runNumericPreferencesCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
         let suiteName = "com.mike.movebreak.tests.numeric.\(UUID().uuidString)"
         guard let testDefaults = UserDefaults(suiteName: suiteName) else {
-            print("✗ FAIL  could not instantiate isolated UserDefaults suite")
-            return 1
+            reporter.check("could not instantiate isolated UserDefaults suite", false)
+            return reporter.failureCount
         }
         defer {
             testDefaults.removePersistentDomain(forName: suiteName)
         }
 
-        func check<T: Equatable>(_ name: String, expected: T, actual: T) {
-            let passed = expected == actual
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed {
-                print("      expected \(expected), got \(actual)")
-            }
-        }
-
         Preferences.withDefaults(testDefaults) {
             // Unconfigured values fall back to documented safe defaults
-            check("default pollInterval", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
-            check("default debouncePolls", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
-            check("default sessionEndGrace", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
-            check("default declineCooldown", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
-            check("default timeoutCooldown", expected: Preferences.defaultTimeoutCooldown, actual: Preferences.timeoutCooldown)
-            check("default promptTimeout", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
-            check("default tabCacheLifetime", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
+            reporter.check("default pollInterval", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("default debouncePolls", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
+            reporter.check("default sessionEndGrace", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
+            reporter.check("default declineCooldown", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
+            reporter.check("default timeoutCooldown", expected: Preferences.defaultTimeoutCooldown, actual: Preferences.timeoutCooldown)
+            reporter.check("default promptTimeout", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
+            reporter.check("default tabCacheLifetime", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
 
             // pollInterval bounds [0.5 ... 60.0]
             testDefaults.set(-1.0, forKey: "pollInterval")
-            check("pollInterval negative falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval negative falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(0.0, forKey: "pollInterval")
-            check("pollInterval zero falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval zero falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(0.1, forKey: "pollInterval")
-            check("pollInterval below min (0.1) falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval below min (0.1) falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(100.0, forKey: "pollInterval")
-            check("pollInterval above max (100.0) falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval above max (100.0) falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(Double.nan, forKey: "pollInterval")
-            check("pollInterval NaN falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval NaN falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(Double.infinity, forKey: "pollInterval")
-            check("pollInterval +Inf falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval +Inf falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(-Double.infinity, forKey: "pollInterval")
-            check("pollInterval -Inf falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval -Inf falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set("not-a-number", forKey: "pollInterval")
-            check("pollInterval malformed string falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
+            reporter.check("pollInterval malformed string falls back", expected: Preferences.defaultPollInterval, actual: Preferences.pollInterval)
             testDefaults.set(5.0, forKey: "pollInterval")
-            check("pollInterval valid in-range accepted", expected: 5.0, actual: Preferences.pollInterval)
+            reporter.check("pollInterval valid in-range accepted", expected: 5.0, actual: Preferences.pollInterval)
 
             // debouncePolls bounds [1 ... 20]
             testDefaults.set(0, forKey: "debouncePolls")
-            check("debouncePolls zero falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
+            reporter.check("debouncePolls zero falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
             testDefaults.set(-5, forKey: "debouncePolls")
-            check("debouncePolls negative falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
+            reporter.check("debouncePolls negative falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
             testDefaults.set(50, forKey: "debouncePolls")
-            check("debouncePolls above max falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
+            reporter.check("debouncePolls above max falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
             testDefaults.set("invalid", forKey: "debouncePolls")
-            check("debouncePolls invalid string falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
+            reporter.check("debouncePolls invalid string falls back", expected: Preferences.defaultDebouncePolls, actual: Preferences.debouncePolls)
             testDefaults.set(4, forKey: "debouncePolls")
-            check("debouncePolls valid accepted", expected: 4, actual: Preferences.debouncePolls)
+            reporter.check("debouncePolls valid accepted", expected: 4, actual: Preferences.debouncePolls)
 
             // sessionEndGrace bounds [5.0 ... 600.0]
             testDefaults.set(0.0, forKey: "sessionEndGrace")
-            check("sessionEndGrace zero falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
+            reporter.check("sessionEndGrace zero falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
             testDefaults.set(2.0, forKey: "sessionEndGrace")
-            check("sessionEndGrace below min falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
+            reporter.check("sessionEndGrace below min falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
             testDefaults.set(1000.0, forKey: "sessionEndGrace")
-            check("sessionEndGrace above max falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
+            reporter.check("sessionEndGrace above max falls back", expected: Preferences.defaultSessionEndGrace, actual: Preferences.sessionEndGrace)
             testDefaults.set(120.0, forKey: "sessionEndGrace")
-            check("sessionEndGrace valid accepted", expected: 120.0, actual: Preferences.sessionEndGrace)
+            reporter.check("sessionEndGrace valid accepted", expected: 120.0, actual: Preferences.sessionEndGrace)
 
             // declineCooldown bounds [60.0 ... 86400.0]
             testDefaults.set(10.0, forKey: "declineCooldown")
-            check("declineCooldown below min falls back", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
+            reporter.check("declineCooldown below min falls back", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
             testDefaults.set(200000.0, forKey: "declineCooldown")
-            check("declineCooldown above max falls back", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
+            reporter.check("declineCooldown above max falls back", expected: Preferences.defaultDeclineCooldown, actual: Preferences.declineCooldown)
             testDefaults.set(1800.0, forKey: "declineCooldown")
-            check("declineCooldown valid accepted", expected: 1800.0, actual: Preferences.declineCooldown)
+            reporter.check("declineCooldown valid accepted", expected: 1800.0, actual: Preferences.declineCooldown)
 
             // timeoutCooldown bounds [60.0 ... 86400.0]
             testDefaults.set(-10.0, forKey: "timeoutCooldown")
-            check("timeoutCooldown negative falls back", expected: Preferences.defaultTimeoutCooldown, actual: Preferences.timeoutCooldown)
+            reporter.check("timeoutCooldown negative falls back", expected: Preferences.defaultTimeoutCooldown, actual: Preferences.timeoutCooldown)
             testDefaults.set(600.0, forKey: "timeoutCooldown")
-            check("timeoutCooldown valid accepted", expected: 600.0, actual: Preferences.timeoutCooldown)
+            reporter.check("timeoutCooldown valid accepted", expected: 600.0, actual: Preferences.timeoutCooldown)
 
             // promptTimeout bounds [5.0 ... 300.0]
             testDefaults.set(1.0, forKey: "promptTimeout")
-            check("promptTimeout below min falls back", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
+            reporter.check("promptTimeout below min falls back", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
             testDefaults.set(500.0, forKey: "promptTimeout")
-            check("promptTimeout above max falls back", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
+            reporter.check("promptTimeout above max falls back", expected: Preferences.defaultPromptTimeout, actual: Preferences.promptTimeout)
             testDefaults.set(45.0, forKey: "promptTimeout")
-            check("promptTimeout valid accepted", expected: 45.0, actual: Preferences.promptTimeout)
+            reporter.check("promptTimeout valid accepted", expected: 45.0, actual: Preferences.promptTimeout)
 
             // tabCacheLifetime bounds [1.0 ... 60.0]
             testDefaults.set(0.1, forKey: "tabCacheLifetime")
-            check("tabCacheLifetime below min falls back", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
+            reporter.check("tabCacheLifetime below min falls back", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
             testDefaults.set(120.0, forKey: "tabCacheLifetime")
-            check("tabCacheLifetime above max falls back", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
+            reporter.check("tabCacheLifetime above max falls back", expected: Preferences.defaultTabCacheLifetime, actual: Preferences.tabCacheLifetime)
             testDefaults.set(10.0, forKey: "tabCacheLifetime")
-            check("tabCacheLifetime valid accepted", expected: 10.0, actual: Preferences.tabCacheLifetime)
+            reporter.check("tabCacheLifetime valid accepted", expected: 10.0, actual: Preferences.tabCacheLifetime)
         }
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - List Normalization Regression Cases
 
     private static func runListNormalizationCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
         let suiteName = "com.mike.movebreak.tests.list.\(UUID().uuidString)"
         guard let testDefaults = UserDefaults(suiteName: suiteName) else {
-            print("✗ FAIL  could not instantiate isolated UserDefaults suite")
-            return 1
+            reporter.check("could not instantiate isolated UserDefaults suite", false)
+            return reporter.failureCount
         }
         defer {
             testDefaults.removePersistentDomain(forName: suiteName)
         }
 
-        func check<T: Equatable>(_ name: String, expected: T, actual: T) {
-            let passed = expected == actual
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed {
-                print("      expected \(expected), got \(actual)")
-            }
-        }
-
         Preferences.withDefaults(testDefaults) {
             // Empty array falls back to default
             testDefaults.set([] as [String], forKey: "videoPatterns")
-            check("empty list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
+            reporter.check("empty list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
 
             // Array of blanks falls back to default
             testDefaults.set(["", "   ", "\t\n"], forKey: "videoPatterns")
-            check("blanks list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
+            reporter.check("blanks list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
 
             // Oversized entries (> 256 chars) dropped
             let oversized = String(repeating: "a", count: 300)
             testDefaults.set([oversized], forKey: "videoPatterns")
-            check("oversized entries list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
+            reporter.check("oversized entries list falls back", expected: Preferences.defaultVideoPatterns, actual: Preferences.videoPatterns)
 
             // Trimming, scheme stripping, deduplication preserving order
             testDefaults.set([
@@ -153,7 +135,7 @@ enum SecuritySelfTests {
                 "http://coursera.org/lecture",
                 "twitch.tv",
             ], forKey: "videoPatterns")
-            check(
+            reporter.check(
                 "deduplication and trimming of URL patterns",
                 expected: ["vimeo.com", "twitch.tv", "coursera.org/lecture"],
                 actual: Preferences.videoPatterns
@@ -162,7 +144,7 @@ enum SecuritySelfTests {
             // Cap at maxListCount (100)
             let many = (1...150).map { "site\($0).org/video" }
             testDefaults.set(many, forKey: "videoPatterns")
-            check("capped at maxListCount (100)", expected: Preferences.maxListCount, actual: Preferences.videoPatterns.count)
+            reporter.check("capped at maxListCount (100)", expected: Preferences.maxListCount, actual: Preferences.videoPatterns.count)
 
             // Bundle ID normalization: trim, drop invalid characters/spaces, deduplicate
             testDefaults.set([
@@ -173,29 +155,29 @@ enum SecuritySelfTests {
                 "invalid/bundle",
                 oversized,
             ], forKey: "ignoredApps")
-            check(
+            reporter.check(
                 "bundle ID normalization and invalid character dropping",
                 expected: Set(["com.custom.app"]),
                 actual: Preferences.ignoredApps
             )
         }
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - URL Host Boundary Regression Cases
 
     private static func runHostBoundaryCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
 
         func checkMatch(_ url: String, pattern: String, expected: Bool, name: String) {
             let actual = BrowserTabInspector.matches(url, [pattern])
             let passed = actual == expected
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed {
-                print("      URL: \(url), pattern: \(pattern), expected \(expected), got \(actual)")
-            }
+            reporter.check(
+                name,
+                passed,
+                detail: "URL: \(url), pattern: \(pattern), expected \(expected), got \(actual)"
+            )
         }
 
         // Bare domain: vimeo.com
@@ -230,15 +212,15 @@ enum SecuritySelfTests {
         checkMatch("https://evilmeet.google.com/abc", pattern: "meet.google.com/", expected: false, name: "evilmeet.google.com rejected")
         checkMatch("https://mail.google.com/", pattern: "meet.google.com/", expected: false, name: "mail.google.com rejected")
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - Ignored Apps Precedence Regression Cases
 
     private static func runIgnoredAppsPrecedenceCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
 
-        func check(
+        func checkIgnored(
             name: String,
             processes: [AudioProcess],
             ignoredApps: Set<String>,
@@ -271,18 +253,18 @@ enum SecuritySelfTests {
             let statePassed = classification.state == expectedState
             let inspectorPassed = inspectorCalled == expectInspectorCalled
             let passed = statePassed && inspectorPassed
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
+            var details: [String] = []
             if !statePassed {
-                print("      expected state \(expectedState), got \(classification.state) (\(classification.reason))")
+                details.append("expected state \(expectedState), got \(classification.state) (\(classification.reason))")
             }
             if !inspectorPassed {
-                print("      expected tabInspector called: \(expectInspectorCalled), actual: \(inspectorCalled)")
+                details.append("expected tabInspector called: \(expectInspectorCalled), actual: \(inspectorCalled)")
             }
+            reporter.record(name, passed: passed, details: details)
         }
 
         // Stage 1 (Mic): Ignored app with live mic is NOT a meeting
-        check(
+        checkIgnored(
             name: "ignored app holding mic is idle",
             processes: [AudioProcess(bundleID: "com.spotify.client", isRunningInput: true)],
             ignoredApps: ["com.spotify.client"],
@@ -291,7 +273,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 1 (Mic): Ignored app helper holding mic is NOT a meeting
-        check(
+        checkIgnored(
             name: "ignored app helper holding mic is idle",
             processes: [AudioProcess(bundleID: "com.spotify.client.helper", isRunningInput: true)],
             ignoredApps: ["com.spotify.client"],
@@ -300,7 +282,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 2 (Player): Ignored native player holding output is NOT video
-        check(
+        checkIgnored(
             name: "ignored native player holding output is idle",
             processes: [AudioProcess(bundleID: "org.videolan.vlc", isRunningOutput: true)],
             ignoredApps: ["org.videolan.vlc"],
@@ -309,7 +291,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 2 (Player): Ignored native player helper holding output is NOT video
-        check(
+        checkIgnored(
             name: "ignored native player helper holding output is idle",
             processes: [AudioProcess(bundleID: "org.videolan.vlc.helper", isRunningOutput: true)],
             ignoredApps: ["org.videolan.vlc"],
@@ -318,7 +300,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 3 (Browser): Ignored browser holding output does NOT trigger AppleScript or video
-        check(
+        checkIgnored(
             name: "ignored browser holding output is idle and tab inspection never runs",
             processes: [AudioProcess(bundleID: "com.google.Chrome", isRunningOutput: true)],
             ignoredApps: ["com.google.Chrome"],
@@ -328,7 +310,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 3 (Browser): Ignored browser helper holding output does NOT trigger AppleScript
-        check(
+        checkIgnored(
             name: "ignored browser helper holding output is idle and tab inspection never runs",
             processes: [AudioProcess(bundleID: "com.google.Chrome.helper", isRunningOutput: true)],
             ignoredApps: ["com.google.Chrome"],
@@ -338,7 +320,7 @@ enum SecuritySelfTests {
         )
 
         // Stage 3 (Safari GPU helper): Safari in ignoredApps suppresses com.apple.WebKit.GPU
-        check(
+        checkIgnored(
             name: "Safari in ignoredApps suppresses WebKit GPU process",
             processes: [AudioProcess(bundleID: "com.apple.WebKit.GPU", isRunningOutput: true)],
             ignoredApps: ["com.apple.Safari"],
@@ -348,7 +330,7 @@ enum SecuritySelfTests {
         )
 
         // Contrast: Non-ignored browser holding output DOES trigger inspection
-        check(
+        checkIgnored(
             name: "non-ignored browser holding output triggers inspection",
             processes: [AudioProcess(bundleID: "com.google.Chrome.helper", isRunningOutput: true)],
             ignoredApps: ["com.spotify.client"],
@@ -357,35 +339,26 @@ enum SecuritySelfTests {
             expectInspectorCalled: true
         )
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - Unsupported Browser Security Regression Cases
 
     private static func runUnsupportedBrowserCases() -> Int {
-        var failures = 0
+        let reporter = SelfTestReporter()
         let suiteName = "com.mike.movebreak.tests.browser.\(UUID().uuidString)"
         guard let testDefaults = UserDefaults(suiteName: suiteName) else {
-            print("✗ FAIL  could not instantiate isolated UserDefaults suite")
-            return 1
+            reporter.check("could not instantiate isolated UserDefaults suite", false)
+            return reporter.failureCount
         }
         defer {
             testDefaults.removePersistentDomain(forName: suiteName)
         }
 
-        func check<T: Equatable>(_ name: String, expected: T, actual: T) {
-            let passed = expected == actual
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed {
-                print("      expected \(expected), got \(actual)")
-            }
-        }
-
         Preferences.withDefaults(testDefaults) {
             // Attempting to configure an unsupported browser is rejected
             testDefaults.set(["com.unsupported.browser", "com.malicious.app"], forKey: "browsers")
-            check(
+            reporter.check(
                 "unsupported browsers rejected; falls back to default supported browsers",
                 expected: Preferences.defaultBrowsers,
                 actual: Preferences.browsers
@@ -393,7 +366,7 @@ enum SecuritySelfTests {
 
             // Configuring a mix of supported and unsupported keeps only supported
             testDefaults.set(["com.google.Chrome", "com.malicious.app"], forKey: "browsers")
-            check(
+            reporter.check(
                 "mix of supported and unsupported keeps only supported",
                 expected: Set(["com.google.Chrome"]),
                 actual: Preferences.browsers
@@ -401,22 +374,22 @@ enum SecuritySelfTests {
         }
 
         // BrowserTabInspector support verification
-        check(
+        reporter.check(
             "Chrome is supported",
             expected: true,
             actual: BrowserTabInspector.isBrowserSupported(bundleID: "com.google.Chrome")
         )
-        check(
+        reporter.check(
             "Safari is supported",
             expected: true,
             actual: BrowserTabInspector.isBrowserSupported(bundleID: "com.apple.Safari")
         )
-        check(
+        reporter.check(
             "Arbitrary app is NOT supported",
             expected: false,
             actual: BrowserTabInspector.isBrowserSupported(bundleID: "com.malicious.app")
         )
-        check(
+        reporter.check(
             "Firefox is NOT supported (no AppleScript tab dictionary)",
             expected: false,
             actual: BrowserTabInspector.isBrowserSupported(bundleID: "org.mozilla.firefox")
@@ -425,17 +398,17 @@ enum SecuritySelfTests {
         // Inspecting an unsupported browser returns unknown and never runs AppleScript
         let inspector = BrowserTabInspector()
         let inspection = inspector.inspectFresh(bundleID: "com.malicious.app")
-        check(
+        reporter.check(
             "inspecting unsupported browser returns unknown verdict",
             expected: TabVerdict.unknown,
             actual: inspection.verdict
         )
-        check(
+        reporter.check(
             "inspecting unsupported browser gives unsupported reason",
             expected: "no AppleScript tab support for this browser",
             actual: inspection.reason
         )
-        check(
+        reporter.check(
             "inspecting unsupported browser has no scriptError",
             expected: nil,
             actual: inspection.scriptError
@@ -454,18 +427,18 @@ enum SecuritySelfTests {
                 return inspector.inspectFresh(bundleID: bundleID)
             }
         )
-        check(
+        reporter.check(
             "unsupported browser stream results in idle state",
             expected: SessionState.idle,
             actual: classification.state
         )
-        check(
+        reporter.check(
             "inspector was called safely without error",
             expected: true,
             actual: inspectorInvoked
         )
 
-        return failures
+        return reporter.failureCount
     }
 
     // MARK: - Video vs Music Tab Classification Cases
@@ -473,14 +446,7 @@ enum SecuritySelfTests {
     // MARK: - Secret Input, Terminal Echo Suppression & Redaction Cases
 
     private static func runSecretRedactionCases() -> Int {
-        var failures = 0
-        func check(_ name: String, passed: Bool, detail: String = "") {
-            if !passed { failures += 1 }
-            print("\(passed ? "✓" : "✗ FAIL")  \(name)")
-            if !passed && !detail.isEmpty {
-                print("      \(detail)")
-            }
-        }
+        let reporter = SelfTestReporter()
 
         let sentinelToken = "SENTINEL_TOKEN_SECRET_987654321"
 
@@ -495,31 +461,25 @@ enum SecuritySelfTests {
         ]
         for err in errorCases {
             let desc = err.description
-            check("KeychainError does not leak secret in description", passed: !desc.contains(sentinelToken))
+            reporter.check("KeychainError does not leak secret in description", passed: !desc.contains(sentinelToken))
         }
 
         // 2. Interactive PTY terminal echo suppression
         var master: Int32 = 0
         var slave: Int32 = 0
         if openpty(&master, &slave, nil, nil, nil) == 0 {
-            let savedStdin = dup(STDIN_FILENO)
-            dup2(slave, STDIN_FILENO)
-
-            var before = termios()
-            tcgetattr(STDIN_FILENO, &before)
-            let echoEnabledInitially = (before.c_lflag & tcflag_t(ECHO)) != 0
-
             let secretPayload = "sentinel_pty_secret_pass\n"
             write(master, secretPayload, secretPayload.utf8.count)
-
-            let readValue = SecretInput.readSecret(prompt: nil)
-
-            var after = termios()
-            tcgetattr(STDIN_FILENO, &after)
-            let echoRestoredAfterwards = (after.c_lflag & tcflag_t(ECHO)) != 0
-
-            dup2(savedStdin, STDIN_FILENO)
-            close(savedStdin)
+            let result = SelfTestSupport.withStandardInput(from: slave) {
+                var before = termios()
+                tcgetattr(STDIN_FILENO, &before)
+                let echoEnabledInitially = (before.c_lflag & tcflag_t(ECHO)) != 0
+                let readValue = SecretInput.readSecret(prompt: nil)
+                var after = termios()
+                tcgetattr(STDIN_FILENO, &after)
+                let echoRestoredAfterwards = (after.c_lflag & tcflag_t(ECHO)) != 0
+                return (echoEnabledInitially, readValue, echoRestoredAfterwards)
+            }
             close(slave)
 
             var echoedBytes = [UInt8](repeating: 0, count: 512)
@@ -530,41 +490,38 @@ enum SecuritySelfTests {
 
             let echoedString = n > 0 ? (String(bytes: echoedBytes[0..<n], encoding: .utf8) ?? "") : ""
 
-            check("PTY slave has echo initially", passed: echoEnabledInitially)
-            check("readSecret accurately reads secret from terminal", passed: readValue == "sentinel_pty_secret_pass")
-            check("readSecret does NOT echo secret back to terminal", passed: !echoedString.contains("sentinel_pty_secret_pass"))
-            check("readSecret restores terminal echo after reading", passed: echoRestoredAfterwards)
+            reporter.check("PTY slave has echo initially", passed: result?.0 == true)
+            reporter.check("readSecret accurately reads secret from terminal", passed: result?.1 == "sentinel_pty_secret_pass")
+            reporter.check("readSecret does NOT echo secret back to terminal", passed: !echoedString.contains("sentinel_pty_secret_pass"))
+            reporter.check("readSecret restores terminal echo after reading", passed: result?.2 == true)
         } else {
-            check("openpty available for echo testing", passed: false, detail: "openpty failed")
+            reporter.check("openpty available for echo testing", passed: false, detail: "openpty failed")
         }
 
         // 3. SecretInput non-interactive pipe reader
         var pipeFds: [Int32] = [0, 0]
         if pipe(&pipeFds) == 0 {
-            let pipeSavedStdin = dup(STDIN_FILENO)
-            dup2(pipeFds[0], STDIN_FILENO)
-            close(pipeFds[0])
-
             let testInput = "noninteractive_secret_123\n"
             write(pipeFds[1], testInput, testInput.utf8.count)
             close(pipeFds[1])
+            let pipeRead = SelfTestSupport.withStandardInput(from: pipeFds[0]) {
+                SecretInput.readSecret(prompt: nil)
+            }
+            close(pipeFds[0])
 
-            let pipeRead = SecretInput.readSecret(prompt: nil)
-
-            dup2(pipeSavedStdin, STDIN_FILENO)
-            close(pipeSavedStdin)
-
-            check("non-interactive pipe input reads accurately", passed: pipeRead == "noninteractive_secret_123")
+            reporter.check("non-interactive pipe input reads accurately", passed: pipeRead == "noninteractive_secret_123")
+        } else {
+            reporter.check("pipe available for non-interactive input testing", passed: false)
         }
 
         // 4. CLI Argument check: verify rejection of secret argument flags
         let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--api-key"]
         for flag in forbiddenFlags {
             let isRejected = flag.hasPrefix("--token") || flag.hasPrefix("--secret") || flag.hasPrefix("--notion-token") || flag.hasPrefix("--api-key")
-            check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)
+            reporter.check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)
         }
 
-        return failures
+        return reporter.failureCount
     }
 
     static func run() -> Int {
