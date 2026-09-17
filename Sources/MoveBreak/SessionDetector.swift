@@ -235,6 +235,7 @@ final class SessionDetector {
         ).sorted()
 
         var inspections: [TabInspection] = []
+        var firstVideo: (bundleID: String, inspection: TabInspection, url: String)?
         for bundleID in playingBrowsers {
             let inspection = tabInspector(bundleID)
             inspections.append(inspection)
@@ -247,15 +248,23 @@ final class SessionDetector {
                     inspections: inspections
                 )
             case .video(let url):
-                return Classification(
-                    state: .video,
-                    reason: "\(bundleID): \(inspection.reason) — \(URLDisplay.sanitize(url, verbose: false))",
-                    activeProcesses: active,
-                    inspections: inspections
-                )
+                // Keep inspecting: a call in another playing browser outranks video,
+                // regardless of the browsers' deterministic sort order.
+                if firstVideo == nil {
+                    firstVideo = (bundleID, inspection, url)
+                }
             case .music, .unknown:
                 continue
             }
+        }
+
+        if let firstVideo {
+            return Classification(
+                state: .video,
+                reason: "\(firstVideo.bundleID): \(firstVideo.inspection.reason) — \(URLDisplay.sanitize(firstVideo.url, verbose: false))",
+                activeProcesses: active,
+                inspections: inspections
+            )
         }
 
         let reason: String
