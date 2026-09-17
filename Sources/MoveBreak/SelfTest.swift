@@ -13,6 +13,7 @@ enum SelfTest {
     ]
 
     static func run() -> Never {
+        let runStarted = ProcessInfo.processInfo.systemUptime
         print("MoveBreak — self-test")
         print(String(repeating: "─", count: 78))
 
@@ -25,12 +26,29 @@ enum SelfTest {
         }
 
         var failures = 0
+        var cases = 0
         for (index, suite) in suites.enumerated() {
             if index > 0 { print("") }
-            failures += suite.run()
+            let casesBefore = SelfTestReporter.caseCountSnapshot()
+            let suiteStarted = ProcessInfo.processInfo.systemUptime
+            let suiteFailures = suite.run()
+            let suiteElapsed = ProcessInfo.processInfo.systemUptime - suiteStarted
+            let suiteCases = SelfTestReporter.caseCountSnapshot() - casesBefore
+            failures += suiteFailures
+            cases += suiteCases
+            print("")
+            print(
+                "SUMMARY suite=\(suite.id.rawValue) cases=\(suiteCases) "
+                    + "failures=\(suiteFailures) elapsed=\(formatDuration(suiteElapsed))"
+            )
         }
 
+        let runElapsed = ProcessInfo.processInfo.systemUptime - runStarted
         print(String(repeating: "─", count: 78))
+        print(
+            "SUMMARY total suites=\(suites.count) cases=\(cases) "
+                + "failures=\(failures) elapsed=\(formatDuration(runElapsed))"
+        )
         if failures == 0 {
             print("All cases passed.")
             exit(0)
@@ -38,5 +56,9 @@ enum SelfTest {
             print("\(failures) case(s) FAILED.")
             exit(1)
         }
+    }
+
+    private static func formatDuration(_ duration: TimeInterval) -> String {
+        String(format: "%.3fs", duration)
     }
 }
