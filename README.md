@@ -1,287 +1,264 @@
 # MoveBreak
 
-A menu-bar macOS app that notices when you've entered a sedentary session — a video call,
-or a video you're actually watching — and offers a short routine in a small window that
-floats over the meeting.
+MoveBreak is a macOS menu-bar app that notices when you enter a video call or start
+watching a video, then offers a short movement routine in a floating panel. It was designed
+for a treadmill desk, with exercises for sciatic, jaw/TMJ, trap, and plantar-fascia work.
 
-Written for a treadmill desk, targeting sciatic, jaw/TMJ, trap, and plantar fascia work.
+> MoveBreak provides general movement prompts, not medical advice. Stop anything that
+> increases pain, and defer to your physical therapist or other clinician.
+
+## Quick start
+
+### Requirements
+
+- An Apple-silicon Mac running macOS 14.4 or later. Detection uses the CoreAudio
+  per-process stream API introduced in macOS 14.4, and the build currently targets `arm64`.
+- Xcode Command Line Tools (`xcode-select --install` if they are not already installed).
+- A local clone of this repository. MoveBreak has no third-party dependencies and does not
+  require the full Xcode app, an Xcode project, or Swift Package Manager.
+
+From the repository root:
 
 ```bash
 ./scripts/build_app.sh
 open ./MoveBreak.app
 ```
 
----
+The build script checks repository documentation, compiles every Swift source, runs the
+complete offline self-test suite, packages `MoveBreak.app`, and ad-hoc signs it. MoveBreak
+runs as a menu-bar accessory and does not show a Dock icon. Look for the flexibility figure
+or `MB` in the menu bar.
 
-## How detection works
+### First-run permission
 
-Everything keys off **CoreAudio's per-process stream state**
-(`kAudioHardwarePropertyProcessObjectList`, macOS 14.4+). This reads whether a process
-holds a live audio stream — it does not tap or record audio, so it needs no permission and
-raises no prompt.
+MoveBreak does not request microphone, audio-recording, Accessibility, or screen-recording
+permission. It reads only CoreAudio's per-process input/output-running flags; it does not tap,
+record, or retain audio.
 
-Three stages, cheapest and most certain first:
-
-| Stage | Signal | Result |
-|---|---|---|
-| 1 | a meeting app holds a live **input** (mic) stream | `meeting` |
-| 2 | a native player holds a live **output** stream | `video` |
-| 3 | a browser holds a live **output** stream | ask its tabs → below |
-| — | none of the above | `idle` |
-
-Stage 1 covers Zoom, Meet, Teams, Slack, and FaceTime through one code path — a live mic
-stream is unambiguous.
-
-This is also what separates "a YouTube tab is open" from "a video is playing": a **paused**
-tab holds no running output stream, so it never even reaches stage 3.
-
-### Audio is reported against helper processes, not apps
-
-This one is load-bearing, and it is not obvious. Chrome's playback is attributed to
-**`com.google.Chrome.helper`**, never to `com.google.Chrome`. Electron apps (Slack, Teams,
-Discord) behave the same way, and Safari's audio comes from `com.apple.WebKit.GPU`, which
-doesn't even share Safari's bundle prefix.
-
-So comparing raw process bundle IDs against an app list matches *nothing* — the browser
-stage silently never fires. `BundleIdentity.owner(of:in:)` resolves helper → owning app,
-and every stage goes through it. `--self-test` covers this specifically, because the
-failure mode is silence rather than an error.
-
-### Why not watch for Zoom's processes?
-
-Because the signal everyone cites is wrong. `caphost` is widely recommended as the
-"in a meeting" indicator, but on this machine it launched 29 seconds after Zoom itself and
-then ran continuously for 30+ hours — it's a persistent helper, not a meeting marker.
-Anything built on it fires permanently. `CptHost` (the older meeting-window host) could
-not be confirmed as still in use by Zoom 7.0.5 at all.
-
-Audio-stream state is both more robust and version-independent.
-
-### Google Meet needs a URL check too
-
-Zoom keeps its microphone stream open while muted, so stage 1 (mic-based) catches it
-whether or not you're speaking. **Chrome does not do this for Meet** — muting a Meet call
-releases the mic stream entirely, so stage 1 sees nothing.
-
-`meetingPatterns` (`meet.google.com/`, `teams.microsoft.com/`, `zoom.us/wc`, etc.) is
-checked in the same tab-inspection pass as video/music, and outranks both: a call is a
-higher-value signal than a video, and a meeting tab active in its own window is trusted
-even if a music tab is open elsewhere. Confirmed with a muted-Meet-plus-Relisten self-test
-case.
-
-### Telling music from video in a browser
-
-CoreAudio attributes all browser audio to the browser process, so Relisten and a YouTube
-video look identical at the bundle-ID level. Stage 3 resolves this by asking the browser
-what's open, via AppleScript.
-
-Chrome's scripting dictionary exposes `active tab`, `URL`, `title`, and `frontmost` — but
-**no `audible` property**, so there's no way to ask which tab is the one making noise.
-Hence the precedence rule:
-
-```
-1. Read the ACTIVE tab of the front window.
-     matches musicPatterns -> ignore     (checked first: more specific)
-     matches videoPatterns -> video
-2. Otherwise read the ACTIVE tab of every window:
-     exactly one video match AND zero music matches -> video
-     anything else (none, or mixed)                 -> ignore
-```
-
-Checking the active tab first is what resolves the both-open case: if you're watching
-something, it's the tab you're looking at. Relisten streaming in a background tab while you
-work in the front tab correctly resolves to *ignore*.
-
-**Step 2 reads per-window active tabs, not every tab.** Scanning all tabs was tried first
-and proved useless on a real machine: with 72 tabs open, five long-lived phish.in tabs meant
-the fallback always saw music and always suppressed, so the branch could never fire.
-Per-window active tabs cut the candidate set from 72 to 15 and is a better model of reality
-— audio almost always comes from the tab that's frontmost in its own window. A buried
-background tab that autoplays with sound is rare, and missing it only costs one prompt.
-
-Music is checked **before** video because its patterns are more specific — e.g.
-`music.youtube.com/watch?v=…` also contains the `youtube.com/watch` video pattern.
-
-The bias is deliberately toward **not** prompting. A missed prompt costs nothing; an
-interruption mid-song is the thing worth avoiding.
-
----
-
-## Verifying it
-
-### Classification rules, offline
-
-```bash
-./build/MoveBreak --self-test
-```
-
-Covers helper-process → app resolution, the Relisten/YouTube combinations, active-vs-
-background tabs, ambiguous mixes, and host-matching edge cases. No browser or permission
-needed. Its `SUMMARY` lines report stable case counts and elapsed time for every suite and
-the complete run. It also runs automatically once as part of `build_app.sh`, which refuses
-to package a build that fails it.
-
-For an opt-in flakiness, warning, inventory, and timing check against the already-built
-executable, run:
-
-```bash
-./scripts/test_health.sh
-```
-
-This performs five complete runs by default. The first is the inventory and timing baseline;
-later runs must keep the same suites and case counts, exit successfully, produce no unexpected
-stderr/runtime warnings, finish before the per-run timeout, and stay within a generous timing
-limit of 3× the baseline plus five seconds. It reports the slowest run and suite so timing creep
-can be investigated without treating the suite as a machine-specific microbenchmark. Run
-`./scripts/test_health.sh --help` for `--runs`, `--timeout`, relative timing, explicit
-`--max-seconds`, and executable overrides. The corresponding `MOVEBREAK_HEALTH_*` environment
-variables are useful for automation. This stress multiplier is never part of the ordinary
-packaged build.
-
-### What your browsers have open, right now
+When MoveBreak needs to distinguish browser video from browser music or a web meeting, it
+uses Apple Events to read browser tab URLs. macOS asks for Automation permission separately
+for each supported browser: Google Chrome, Safari, Brave, Arc, and Microsoft Edge. Trigger
+and verify that permission immediately with a supported browser running:
 
 ```bash
 ./MoveBreak.app/Contents/MacOS/MoveBreak --tabs
 ```
 
-Shows each running browser's active tab, the per-window fallback candidates, which list
-each matched, and the verdict — without needing anything to be playing. This is the fastest
-way to check the Automation grant and to see why a given tab did or didn't classify.
+Approve the macOS prompt. If you previously denied it, enable the browser under **System
+Settings → Privacy & Security → Automation → MoveBreak** and run `--tabs` again. An error
+containing `-1743` means Automation is still denied. The normal detector queries tabs only
+while a supported browser has live audio output; `--tabs` is the explicit one-shot exception.
 
-Prints hosts only by default since it reads your actual browsing; `--verbose` for full URLs.
+An ad-hoc signature changes whenever the executable changes, so macOS may ask again after
+each rebuild. See [Stable signing and updates](#stable-signing-and-updates) to keep the grant
+stable across builds.
 
-### Live detection
+### Quick verification
+
+These checks need no credentials or live meeting:
+
+```bash
+./build/MoveBreak --self-test
+./MoveBreak.app/Contents/MacOS/MoveBreak --tabs
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo
+```
+
+The first command verifies classification, security, persistence, and updater behavior
+offline. The second verifies browser Automation and displays the classification of current
+tabs. The third opens the routine-choice panel without waiting for detection.
+
+For a live end-to-end check, start this command and then play and pause a recognized video:
 
 ```bash
 ./build/MoveBreak --diagnose
-./build/MoveBreak --diagnose --verbose  # full URLs instead of host-level summary
 ```
 
-Prints a live table of every process holding an audio stream (pid · bundle id · in · out),
-the resolved browser tab URLs and which list they matched, and the final verdict. Redraws
-whenever anything observable changes. Host-level summaries are printed by default to preserve
-privacy; pass `--verbose` if full URLs are needed.
+It prints a host-level summary by default. Add `--verbose` only when you intentionally want
+full browser URLs written to the terminal.
 
-The two-second detector pass reads only each CoreAudio process object's input/output flags
-until it finds a live stream. PID and bundle identity are then resolved only for live
-objects. Missing bundle IDs use a small fallback cache keyed by CoreAudio object plus PID;
-entries survive consecutive polls, but expire after 10 seconds or when the object disappears.
+## Everyday operation
 
-Walk through these to confirm real-world behavior:
+MoveBreak waits for two consecutive matching polls before changing state (normally about
+four seconds with the defaults). It prompts once per continuous meeting/video session. From
+the prompt, choose a routine or select **Not now**. A chosen routine opens a checklist; only
+exercises you explicitly check are recorded when you finish it.
 
-1. Idle desktop → `idle`
-2. YouTube tab open but **paused** → still `idle`
-3. Press play → `video`
-4. Relisten or SiriusXM playing, front tab → `idle`, matched `musicPatterns`
-5. Relisten playing in a background tab while you work in the front tab → `idle`
-6. Relisten **and** a YouTube video open, YouTube in front → `video`; switch front tab
-   back to Relisten → `idle`
-7. Join a real Zoom meeting → `meeting`; **mute yourself** and confirm it stays `meeting`
-8. Leave → `idle`
+The menu provides:
 
-Step 7 confirmed: Zoom's mute is software-level, the input stream stays open, `meeting`
-holds. Confirmed live on this machine.
+- the current detection state;
+- each nonempty saved routine, for starting one manually;
+- **Edit Routines…** for adding, renaming, deleting, or changing local routines;
+- **Pause Detection** / **Resume Detection**; and
+- **Quit MoveBreak**.
 
-Any bundle ID or URL that shows up unclassified can be added to the lists — see Tuning. The
-process table's `RESOLVES TO` column shows exactly which list (if any) each process landed
-in, which is the fastest way to see why something wasn't detected.
+The default lifecycle rules are:
 
-### The UI
+- two matching polls are required for a state change;
+- **Not now** suppresses prompts for 45 minutes;
+- an unanswered prompt closes after 30 seconds and suppresses prompts for 15 minutes; and
+- 60 seconds of continuous idle ends a session. Moving from a meeting directly into a video
+  is still one session, so it does not produce a second prompt.
 
-```bash
-./MoveBreak.app/Contents/MacOS/MoveBreak --demo           # the routine-choice prompt
-./MoveBreak.app/Contents/MacOS/MoveBreak --demo-pt         # the PT checklist
-./MoveBreak.app/Contents/MacOS/MoveBreak --demo-builder    # the routine editor
-```
+### Start at login
 
-Shows the panels immediately without waiting for a meeting. `NSFloatingWindowLevel`,
-top-right of the active screen (the editor is centered instead — it's opened
-deliberately, not tied to a meeting). The original fixed sizing here (360×296) no longer
-applies to the prompt: its height now grows with however many routines are saved.
-
-**Confirmed fixed — was a real crash.** The first build aborted (`SIGABRT`) every time
-detection tried to show the prompt: `NSPanel` was being created from the background polling
-queue, and AppKit windows must be built on the main thread. Three crash reports on first
-run, all from `AppDelegate.startPolling() → SessionDetector.poll() → onPromptDue →
-PromptPanelController.show → FloatingPanel.init`. Every path from the detector back to the
-UI now hops through `onMain(...)`, and `FloatingPanel.init` asserts it's on the main thread
-so a regression here fails loudly instead of silently aborting again. Verified by forcing
-the exact crash path 12 times in a row afterward with zero new crash reports, and by
-screenshotting the panel appearing live from real detection.
-
-Floating over a genuinely full-screen Zoom window is the one thing that still needs a
-real meeting to confirm — `.fullScreenAuxiliary` and `.nonactivatingPanel` are what should
-make it work, but a plain window-level check can't fully stand in for that.
-
-### If the menu bar icon doesn't appear
-
-**This is expected, not a bug, if your menu bar is full.** macOS silently drops a status
-item when there's no room — it parks the item's window off-screen (`y = −30` on this
-machine) rather than erroring. `--status-check` reports this directly:
-
-```bash
-./MoveBreak.app/Contents/MacOS/MoveBreak --status-check
-```
-
-`window=(0.0, -30.0, 34.0, 30.0)` (negative y) means the icon was created but macOS has
-nowhere to put it — usually because a rotated/narrow display plus Control Center plus other
-menu-bar apps fill the available width. Confirmed this is the actual cause on this machine
-via that check.
-
-Rather than fight the menu bar for space, control the running instance directly:
-
-```bash
-./MoveBreak.app/Contents/MacOS/MoveBreak --show           # show the prompt now
-./MoveBreak.app/Contents/MacOS/MoveBreak --toggle-pause   # pause / resume detection
-./MoveBreak.app/Contents/MacOS/MoveBreak --quit           # quit the running instance
-```
-
-These work via `DistributedNotificationCenter` (same-user IPC, no extra permission) and
-reach the running app regardless of whether its status item got a menu bar slot. Verified
-`--show` (a panel appeared) and `--quit` (the process exited cleanly, no new crash) against
-a live instance.
-
-If you'd rather free up menu bar space instead, removing a couple of Control Center modules
-(System Settings → Control Center) is the more permanent fix.
-
----
-
-## Automation permission
-
-Stage 3 sends Apple Events to Chrome/Safari, so macOS will prompt once per browser.
-
-**TCC keys that grant to the code signature, and an ad-hoc signature changes on every
-rebuild** — so by default Chrome re-prompts after each build. To make the grant stick,
-create one self-signed code-signing certificate:
-
-1. Keychain Access → *Certificate Assistant* → *Create a Certificate…*
-2. Name: `MoveBreak Signing`, Identity Type: *Self Signed Root*,
-   Certificate Type: *Code Signing*
-3. Then build with it:
-
-```bash
-./scripts/build_app.sh "MoveBreak Signing"
-```
-
-If tab reads fail, `--diagnose` reports it explicitly as
-`Automation permission not granted (error -1743)`.
-
----
-
-## Start at login
+Keep the built app at a stable path, then install and start its per-user LaunchAgent:
 
 ```bash
 ./scripts/install_login_item.sh
 ```
 
-Installs a LaunchAgent (not `SMAppService`, which is unreliable for locally-built,
-non-notarized bundles). Remove with `--uninstall`.
+The generated `~/Library/LaunchAgents/com.mike.movebreak.plist` points to the absolute path
+of the app in the current checkout. If the checkout moves, rerun the install command from
+the new location. To stop the LaunchAgent and remove its plist:
 
----
+```bash
+./scripts/install_login_item.sh --uninstall
+```
 
-## Tuning
+### Uninstall and reset
 
-All settings live in `UserDefaults` (`com.mike.movebreak`) and override built-in defaults:
+1. Run `./scripts/install_login_item.sh --uninstall` from the checkout if start-at-login was
+   installed.
+2. Quit MoveBreak from its menu, or send `--quit` as shown below.
+3. Delete `MoveBreak.app` and the checkout if they are no longer needed.
+
+Those steps preserve preferences, saved routines, local history, and any Notion credential.
+To remove them too, use the reset commands in [Configuration](#configuration), delete
+`~/Library/Application Support/MoveBreak/`, and remove the Keychain item whose service is
+`com.mike.MoveBreak.notion` and account is `integrationToken`. These data-removal steps are
+permanent, so inspect or back up local history first.
+
+## Detection behavior
+
+Detection uses CoreAudio's per-process stream state in three stages:
+
+| Stage | Signal | Classification |
+|---|---|---|
+| 1 | A configured meeting app or browser has a live input stream | `meeting` |
+| 2 | A configured native player has live output | `video` |
+| 3 | A supported browser has live output | Inspect tab URLs for meeting, video, or music |
+| — | No rule matches | `idle` |
+
+CoreAudio often reports audio against helper processes rather than the visible app. MoveBreak
+resolves helpers such as Chrome renderers, Electron helpers, and Safari WebKit processes to
+their owning app before applying the rules.
+
+For a playing browser, a meeting URL outranks video and music. Otherwise, the active tab of
+the front window is decisive: known music is ignored and known video is classified as video.
+If that tab is inconclusive, MoveBreak examines the active tab of each browser window. It
+accepts a call, or exactly one video match with no music matches; ambiguous browser audio is
+deliberately ignored to avoid interrupting music. Paused video has no live output stream and
+does not reach tab inspection.
+
+The supported browser allowlist is fixed to Chrome, Safari, Brave, Arc, and Edge because
+each has a known AppleScript implementation. Firefox and other browsers are not supported.
+
+## Diagnostics and troubleshooting
+
+### Browser tabs and live audio
+
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --tabs
+./build/MoveBreak --diagnose
+./build/MoveBreak --diagnose --verbose
+```
+
+`--tabs` is a one-shot Automation and URL-rule probe. `--diagnose` continuously shows live
+CoreAudio processes, owning-app resolution, browser inspection, and the final verdict. Both
+redact URLs to hosts by default; `--verbose` exposes full URLs.
+
+A useful live sequence is:
+
+1. Idle desktop → `idle`.
+2. Recognized video open but paused → still `idle`.
+3. Play it → `video` after the debounce.
+4. Play a recognized music site in the active tab → `idle` with a music reason.
+5. Join a call → `meeting`; mute and confirm your conferencing app still exposes either a
+   live input stream or a recognized active meeting URL.
+6. Leave or stop playback → `idle` after the debounce, with the session ending after the
+   idle grace period.
+
+### UI previews
+
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo-pt
+./MoveBreak.app/Contents/MacOS/MoveBreak --demo-builder
+```
+
+These launch the app and show the prompt, the seeded PT checklist (or first available
+routine), or the routine editor. Demo launches do not start detection or automatic updates.
+
+### Missing menu-bar icon
+
+macOS can place a status item off-screen when the menu bar has no room. Launch with the
+status diagnostic to inspect its geometry:
+
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --status-check
+```
+
+A negative `y` value in `window=(...)` indicates an off-screen status item. Free menu-bar
+space in **System Settings → Control Center**, or control an already-running instance with:
+
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --show
+./MoveBreak.app/Contents/MacOS/MoveBreak --toggle-pause
+./MoveBreak.app/Contents/MacOS/MoveBreak --quit
+```
+
+These commands use same-user `DistributedNotificationCenter` messages and need no extra
+permission. They report that the message was sent even if no MoveBreak instance is running.
+
+### Unsupported system
+
+On a system without the required CoreAudio property, the menu reports **Unsupported: needs
+macOS 14.4+** and detection and updates do not start. Use an Apple-silicon Mac on macOS 14.4
+or later; the current build script does not produce an Intel binary.
+
+## Command-line reference
+
+Run `./build/MoveBreak --help` for the executable's authoritative help. The shipped flags are:
+
+| Flag | Behavior |
+|---|---|
+| `--help`, `-h` | Print help and exit. |
+| `--version` | Print the bundle version and exit; use the app-bundle executable for a packaged version. |
+| `--self-test` | Run all offline self-test suites and exit. |
+| `--tabs` | Probe supported running browsers once and exit. |
+| `--diagnose` | Continuously print live detection state. |
+| `--verbose` | With `--tabs` or `--diagnose`, print full URLs instead of hosts. |
+| `--demo` | Launch and show the routine-choice prompt. |
+| `--demo-pt` | Launch and show the PT checklist. |
+| `--demo-builder` | Launch and show the routine editor. |
+| `--configure-notion` | Interactively configure optional Notion sync and exit. |
+| `--show` | Ask an already-running instance to show the prompt, then exit. |
+| `--toggle-pause` | Ask an already-running instance to pause/resume, then exit. |
+| `--quit` | Ask an already-running instance to quit, then exit. |
+| `--status-check` | Launch normally and report status-item geometry to stderr after one second. |
+| `--check-update-now` | Check once for an update and exit; installation requires stable signing. |
+
+Secrets are rejected in command-line arguments. In particular, do not invent token flags;
+use the interactive `--configure-notion` flow.
+
+The repository scripts are:
+
+```bash
+./scripts/build_app.sh                         # build and ad-hoc sign
+./scripts/build_app.sh "MoveBreak Signing"     # build with a stable identity
+./scripts/install_login_item.sh                # install/start login LaunchAgent
+./scripts/install_login_item.sh --uninstall    # stop/remove login LaunchAgent
+./scripts/test_health.sh --help                 # repeated self-test health options
+./scripts/check_agent_context.sh --help         # repository documentation check options
+```
+
+`scripts/check_architecture_docs.sh` accepts an optional architecture-document path for
+test fixtures; its normal repository invocation is `./scripts/check_architecture_docs.sh`.
+
+## Configuration
+
+Preferences use the `com.mike.movebreak` `UserDefaults` domain. List writes replace the
+entire built-in list; they do not append to it. Examples:
 
 ```bash
 defaults write com.mike.movebreak musicPatterns -array \
@@ -289,135 +266,185 @@ defaults write com.mike.movebreak musicPatterns -array \
 
 defaults write com.mike.movebreak promptTimeout -float 45
 
-# Reset an individual setting back to its built-in default:
+# Reset one setting to its built-in default.
 defaults delete com.mike.movebreak musicPatterns
 
-# Reset all MoveBreak configuration back to factory defaults:
+# Reset every preference, including saved routines and the Notion database ID.
+# This does not delete local history or the Notion token in Keychain.
 defaults delete com.mike.movebreak
 ```
 
-### Validated Timing & Bounds
+The app also owns `savedRoutines` (JSON-encoded routine definitions) and
+`notionDatabaseID` (the non-secret Notion database identifier) in this domain. Treat
+`savedRoutines` as app-managed data rather than editing its encoded value with `defaults`.
 
-User configuration is treated as untrusted input. Non-finite (`NaN`, `±Inf`), negative, non-positive, or out-of-range values are rejected deterministically, falling back to safe documented defaults to prevent tight poll loops, zero debounces, or unbounded suppression:
+Invalid numeric values fall back to their built-in defaults:
 
-| Key | Safe Range | Default | Purpose |
-|---|---|---|---|
-| `pollInterval` | `0.5` – `60.0` s | `2.0` s | Audio process list polling interval |
-| `debouncePolls` | `1` – `20` polls | `2` polls | Consecutive matching polls required before state changes |
-| `sessionEndGrace` | `5.0` – `600.0` s | `60.0` s | Idle duration before a session is marked finished |
-| `declineCooldown` | `60.0` – `86400.0` s | `2700.0` s (45m) | Prompt suppression after clicking "Not now" |
-| `timeoutCooldown` | `60.0` – `86400.0` s | `900.0` s (15m) | Prompt suppression after an unanswered prompt timeout |
-| `promptTimeout` | `5.0` – `300.0` s | `30.0` s | Floating prompt countdown duration |
-| `tabCacheLifetime` | `1.0` – `60.0` s | `5.0` s | AppleScript tab read cache TTL |
+| Key | Accepted range | Default | Purpose |
+|---|---:|---:|---|
+| `pollInterval` | 0.5–60 seconds | 2 seconds | CoreAudio polling interval |
+| `debouncePolls` | 1–20 polls | 2 polls | Consecutive classifications required |
+| `sessionEndGrace` | 5–600 seconds | 60 seconds | Continuous idle before a session ends |
+| `declineCooldown` | 60–86,400 seconds | 2,700 seconds | Suppression after **Not now** |
+| `timeoutCooldown` | 60–86,400 seconds | 900 seconds | Suppression after prompt timeout |
+| `promptTimeout` | 5–300 seconds | 30 seconds | Prompt countdown |
+| `tabCacheLifetime` | 1–60 seconds | 5 seconds | Browser-tab result cache |
 
-### List Normalization & Denial-List Rules
+The configurable lists and complete built-in defaults are:
 
-- **Deterministic normalization**: Whitespace is trimmed, schemes (`https://`) and leading slashes are stripped, empty entries and oversized items (> 256 characters) are dropped, entries are deduplicated preserving order, and lists are capped at 100 items. If no valid items remain, the setting falls back to its built-in defaults.
-- **URL host boundary matching**: Bare-domain patterns (e.g. `vimeo.com`, `twitch.tv`) match only that host or its subdomains (`www.vimeo.com`, `player.vimeo.com`). Deceptive host suffixes (`evilvimeo.com`, `notvimeo.com`) or host extensions (`vimeo.com.attacker.com`) are rejected. Host-plus-path patterns (`youtube.com/watch`) enforce both the host boundary and path prefix.
-- **Fixed browser allowlist**: Configuring `browsers` is strictly constrained to the fixed internal allowlist with AppleScript dictionary support (`com.google.Chrome`, `com.apple.Safari`, `com.brave.Browser`, `company.thebrowser.Browser`, `com.microsoft.edgemac`). Arbitrary application bundle IDs cannot expand AppleScript targeting.
-- **Ignored-app precedence**: Any process belonging to `ignoredApps` (or its helper processes, such as `com.spotify.client.helper` or `com.apple.WebKit.GPU`) is excluded before mic (Stage 1), native player (Stage 2), and browser tab inspection (Stage 3). Ignored apps never trigger AppleScript tab queries or session prompts.
+| Key | Built-in values |
+|---|---|
+| `meetingApps` | `us.zoom.xos`, `us.zoom.CptHost`, `us.zoom.aomhost`, `com.microsoft.teams2`, `com.microsoft.teams`, `com.cisco.webexmeetingsapp`, `com.apple.FaceTime`, `com.tinyspeck.slackmacgap`, `com.hnc.Discord`; supported browsers are also treated as meeting apps for live input |
+| `nativePlayers` | `com.apple.QuickTimePlayerX`, `org.videolan.vlc`, `com.colliderli.iina` |
+| `browsers` | `com.google.Chrome`, `com.apple.Safari`, `com.brave.Browser`, `company.thebrowser.Browser`, `com.microsoft.edgemac` |
+| `ignoredApps` | `com.spotify.client`, `com.apple.Music` |
+| `meetingPatterns` | `meet.google.com/`, `teams.microsoft.com/`, `teams.live.com/`, `zoom.us/wc`, `zoom.us/j/`, `whereby.com/`, `webex.com/meet`, `app.slack.com/huddle`, `discord.com/channels` |
+| `videoPatterns` | `youtube.com/watch`, `youtube.com/shorts`, `youtube.com/live`, `vimeo.com`, `netflix.com/watch`, `twitch.tv`, `hulu.com/watch`, `max.com/video`, `disneyplus.com/video`, `coursera.org/lecture`, `udemy.com/course` |
+| `musicPatterns` | `music.youtube.com`, `relisten.net`, `phish.in`, `siriusxm.com`, `player.siriusxm.com`, `bandcamp.com`, `soundcloud.com`, `open.spotify.com`, `music.apple.com`, `archive.org/details`, `nugs.net`, `mixcloud.com` |
 
-Behavior worth knowing:
+List entries are trimmed, deduplicated in order, limited to 256 characters each and 100
+items per list, and rejected when malformed. An empty normalized list falls back to its
+built-in default. URL patterns match exact hosts or subdomains plus an optional path prefix;
+lookalike suffixes do not match. The `browsers` setting can narrow the fixed allowlist but
+cannot add an arbitrary AppleScript target. `ignoredApps` wins before every detection stage,
+including for recognized helper processes.
 
-- The prompt fires **immediately** on joining, once per session.
-- "Not now" suppresses for 45 min; an unanswered prompt suppresses for 15 min.
-- A session ends after 60s of continuous idle. Meeting → video inside one stretch is not a
-  new session, so you don't get a second prompt without having got up.
+## Routines and local history
 
----
+MoveBreak seeds three editable local routines on first launch:
 
-## Exercise content
+- **Do PT** (about 9 minutes);
+- **Workout** (about 5 minutes); and
+- **Just Stretch** (about 6 minutes).
 
-All exercises live in one catalog (`ExerciseCatalog.swift`), written for **standing at a
-treadmill desk**, each tagged for whether you need to stop walking:
+The estimate is computed from the current exercise count, so edits change it. Empty routines
+remain saved in the editor but are omitted from prompts and the menu. At the start of each
+local routine, walk-safe exercises are shuffled first and pause-treadmill exercises are
+shuffled after them. Heed the walk/pause marker and stop the treadmill for any exercise that
+requires balance, floor work, or lifting a foot from the belt.
 
-- 🚶 fine while the belt is running — jaw, neck, trap, shoulder work
-- ⏸ pause the treadmill — anything needing balance, the floor, or a foot off the belt
+Finishing a checklist appends one JSON object per line to:
 
-Routines are user-defined picks from that catalog (`RoutineStore.swift`), editable from
-the menu bar's **Edit Routines…** item — pick exercises into as many named routines as you
-want; a routine with nothing picked just doesn't show up in the prompt or menu. The app
-ships with three starter routines seeded from the catalog, identical in content to what
-used to be hardcoded:
+```text
+~/Library/Application Support/MoveBreak/sessions.jsonl
+```
 
-**Do PT** (~8 min) — sciatic, jaw/TMJ, trap/levator, plantar fascia.
+The app creates/tightens the `MoveBreak` directory to owner-only mode `0700` and contained
+files to `0600`. Failed Notion deliveries are stored atomically in `pending-sync.json` and
+retried at app launch. The local JSONL append happens before any network attempt and remains
+the source of truth.
 
-**Workout** (~10 min) — bodyweight strength at the desk.
+Saved routine definitions and other non-secret preferences live in `UserDefaults`, not in
+the Application Support directory. MoveBreak does not store audio or a general browser
+history. Diagnostic commands print hosts unless `--verbose` is explicitly supplied.
 
-**Just Stretch** (~4 min) — mostly walk-safe; the one to pick when you don't want to stop.
+## Optional Notion sync
 
-Each time a routine is started, `Routine.shuffledForSession()` reorders it: walk-safe
-exercises are shuffled among themselves and shown first, pause-treadmill exercises are
-shuffled among themselves and shown after. That's the one constraint kept from the old
-hand-authored PT ordering — don't make someone stop the treadmill before the work that
-doesn't need it — layered under a semi-randomized order so a routine doesn't play out
-identically every session.
+Groundwork integration is not shipped. The only current remote completion integration is
+optional Notion sync; local history works without it.
 
-The `Exercise` model carries a `posture` field that MVP only populates with `.standing`, so
-adding the "Sitting at Desk" mode later is a content change rather than a refactor.
+Create a Notion internal integration and a database shared with that integration. The
+database must have these properties with matching names and types: `Entry` (title), `Date`
+(date), `Routine` (select), `Exercises Completed` (rich text), `Completed` (number), `Total`
+(number), and `Est. Duration (min)` (number). Then run:
 
-> General movement prompts, not medical advice — stop anything that increases pain, and
-> defer to your PT.
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --configure-notion
+```
 
----
+The interactive prompt disables terminal echo for the token. The token is stored only in
+the device-local Keychain service `com.mike.MoveBreak.notion`, account `integrationToken`,
+with `AfterFirstUnlockThisDeviceOnly` accessibility. It is never accepted as an argument,
+written to `UserDefaults`, or included in app diagnostics. The non-secret database ID is
+stored in `UserDefaults` as `notionDatabaseID`.
 
-## Build notes
+On completion, Notion receives the date, routine title, checked exercise names, checked and
+total counts, and estimated duration. A network or configuration failure does not undo local
+history; it adds the record to the local pending queue.
 
-MoveBreak compiles every Swift source directly with `swiftc`; it has no Xcode project,
-SwiftPM manifest, or external dependency. CommandLineTools provides the compiler and system
-frameworks, so full Xcode is not required. The build script runs all CLI self-tests before
-packaging and signing the app. It performs one self-test run; use `./scripts/test_health.sh`
-after building when repeat-run health and timing diagnostics are wanted.
+## Stable signing and updates
 
-For the complete current runtime, data flow, threading and security boundaries, and an
-inventory of every source module, see [ARCHITECTURE.md](ARCHITECTURE.md). For ordered future
-work and transitional component ownership, see [ROADMAP.md](ROADMAP.md).
+The default build is ad-hoc signed. This is sufficient for local execution, but Automation
+grants may be requested after rebuilding and automatic update installation is disabled
+because an ad-hoc build cannot establish signer continuity.
 
----
+For a stable local identity, create a certificate in Keychain Access:
 
-## Credential Security & Local Data Storage
+1. Choose **Keychain Access → Certificate Assistant → Create a Certificate…**.
+2. Use the name `MoveBreak Signing`, identity type **Self Signed Root**, and certificate
+   type **Code Signing**.
+3. Rebuild with that exact identity:
 
-MoveBreak enforces strict credential boundaries and owner-only local permissions to protect personal session and exercise completion data:
+```bash
+./scripts/build_app.sh "MoveBreak Signing"
+```
 
-### Secrets vs. Non-Secret Configuration
+A certificate-signed normal launch checks the latest `mkny13/movebreak` GitHub release at
+startup and every 24 hours. A newer `MoveBreak.app.zip` is installed only when the app is
+idle and no prompt, checklist, or editor is visible. The updater fails closed: it requires
+the official HTTPS release path, a release-provided SHA-256 digest, matching bundle ID,
+executable and version, contained extraction paths, a strict valid code signature, and the
+exact same leaf signing certificate as the running app. Failed verification leaves the
+current app untouched. Staging uses owner-only directories under
+`~/Library/Application Support/MoveBreak/Updates/`.
 
-- **Integration Secrets (Keychain):** API credentials (such as the Notion integration token or future Groundwork tokens) are stored exclusively in the macOS Keychain under service `com.mike.MoveBreak.notion` and account `integrationToken`. Items use the `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` accessibility class, ensuring they remain device-local (never synced to iCloud Keychain) and accessible across desktop screen locks. Secrets are never accepted as command-line arguments, never written to `UserDefaults`, and omitted from all logs and error diagnostics.
-- **Interactive Secret Entry (`SecretInput`):** Configured via `MoveBreak --configure-notion`. Terminal echo (`ECHO`) is disabled during interactive input, and signal handlers guarantee terminal attributes are restored even if interrupted via `SIGINT` (Ctrl+C), `SIGTERM`, or error. Piped/non-interactive stdin continues to be supported for testing without echoing or logging token values.
-- **Non-Secret Configuration (`UserDefaults`):** Database IDs (`notionDatabaseID`), audio bundle ID sets, and URL pattern matching lists are stored in `UserDefaults` under domain `com.mike.movebreak` with strict normalization, length limits, and numeric bounds validation.
+Use this only as a diagnostic one-shot check; it does not bypass any trust rule:
 
-### Local Session Data & Storage Permissions
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --check-update-now
+```
 
-- **Storage Location:** Local files reside in `~/Library/Application Support/MoveBreak/`.
-- **Directory Permissions:** The `MoveBreak` Application Support directory is created and enforced with POSIX permissions `0700` (`drwx------`), restricting access solely to the current user.
-- **Session History (`sessions.jsonl`):** Completed exercise routines are recorded in an append-only JSONL format with POSIX permissions `0600` (`-rw-------`).
-- **Offline Sync Queue (`pending-sync.json`):** Sessions pending upload are maintained with mode `0600` (`-rw-------`) and updated using atomic replacement (write-to-temporary and `rename`) to prevent corrupt writes on power loss or termination.
-- **Startup Hardening:** On initialization, `SessionLogger` tightens existing directory permissions to `0700` and scans contained files to enforce `0600`.
-- **Persistence Observability:** Persistence failures to local storage are observable and surfaced directly to callers as typed errors, preventing silent data loss or premature upload attempts.
+## Build and test details
 
-### Automatic Update Trust Boundary & Code Signing Policy
+`./scripts/build_app.sh` compiles `Sources/MoveBreak/*.swift` directly with `swiftc`, links
+only macOS system frameworks, runs `./build/MoveBreak --self-test`, assembles the app, and
+signs it. Build products are written to the ignored `build/` and `MoveBreak.app/` paths.
 
-MoveBreak incorporates a fail-closed automatic update verification pipeline that prevents attacker-supplied, tampered, or mismatched binaries from replacing or executing within the installed application:
+For an opt-in repeat-run health check against an already-built executable:
 
-- **Provenance & URL Boundaries:** Only official releases from `mkny13/movebreak` are accepted. The asset name must match `MoveBreak.app.zip` and the download URL must be an HTTPS `github.com` endpoint matching `https://github.com/mkny13/movebreak/releases/download/<tag>/MoveBreak.app.zip`. Release tags are strictly validated to prevent directory traversal or malformed strings.
-- **Release Asset Digest:** The release asset metadata from GitHub must include a parseable `sha256:` digest (64 hex characters). The downloaded archive is verified against this digest prior to extraction; any digest mismatch immediately deletes the staging folder and fails closed.
-- **Isolated Staging & Symlink Containment:** Updates are staged in an app-owned, randomly named directory (`~/Library/Application Support/MoveBreak/Updates/<UUID>/`) with POSIX mode `0700`. The extracted bundle and all internal files are checked to guarantee no symlinks escape the staging directory.
-- **Bundle Identity & Version Validation:** The extracted `Info.plist` is inspected to verify that `CFBundleIdentifier` matches `com.mike.movebreak`, `CFBundleExecutable` exists as an executable regular file, and `CFBundleShortVersionString` matches the release tag.
-- **Strict Code Signing & Signer Continuity:** The candidate bundle undergoes strict code-signature validation (`/usr/bin/codesign --verify --deep --strict`). Signer continuity is enforced by comparing leaf signing certificates: the candidate bundle must match the exact leaf signing certificate of the currently running app (e.g. `MoveBreak Signing`).
-- **Fail-Closed Ad-Hoc Build Behavior:** Local development builds signed ad-hoc (`identity: -`) cannot serve as a trust anchor. Automatic update checks report an actionable message (`automatic installation is disabled: running build is ad-hoc signed (requires "MoveBreak Signing" certificate)`) and refuse to download or stage updates.
-- **Subprocess & Execution Boundaries:** All subprocess operations (`/usr/bin/ditto`, `/usr/bin/codesign`, `/usr/bin/xattr`) use fixed absolute executable paths and argument arrays without shell evaluation, protected by bounded execution timeouts. The quarantine flag (`com.apple.quarantine`) is stripped only after every integrity and certificate check has succeeded, and the existing app remains untouched if any step fails.
+```bash
+./scripts/test_health.sh
+```
 
----
+It performs five self-test runs by default, rejects changed suite/case inventories and
+unexpected diagnostics, enforces a per-run timeout, and compares later timing with the first
+run. `./scripts/test_health.sh --help` documents command options and the corresponding
+`MOVEBREAK_HEALTH_*` environment variables. This stress check is not part of the ordinary
+build.
 
-## Integration with Groundwork
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the shipped runtime, data flow, threading,
+persistence, security boundaries, and module inventory. See [ROADMAP.md](ROADMAP.md) for the
+future-state sequence and ownership of transitional components.
 
-MoveBreak's Groundwork integration is planned, not shipped. Today, the bundled exercise
-catalog, local routine editor, local history, and optional Notion sync remain active. The
-migration will retain native CoreAudio/browser detection and the floating macOS HUD while
-adding Groundwork-generated routines and durable completion sync in dependency order.
+## Historical implementation notes
 
-See [ROADMAP.md](ROADMAP.md) for the authoritative current/future boundary and the ordered
-[#2 migration](https://github.com/mkny13/movebreak/issues/2).
+These observations explain current choices; they are not universal setup promises:
 
-## Automation & Agent Workflows
+- During early development on one machine, Zoom's `caphost` appeared well after Zoom started
+  and then remained alive for more than a day, while the older `CptHost` behavior could not
+  be confirmed. That investigation led MoveBreak to use stream state rather than process
+  presence as the meeting signal.
+- A test profile with dozens of tabs showed that scanning every tab made background music
+  sites suppress detection indefinitely. The implementation therefore inspects the active
+  tab in each window for its fallback, not every tab.
+- Early builds created an `NSPanel` from the polling queue and crashed. UI creation and
+  callbacks now cross an explicit main-thread boundary, covered by self-tests and assertions.
+- An off-screen status-item frame was observed when a narrow menu bar was full. That result
+  motivated `--status-check` and same-user remote-control flags; exact geometry varies by Mac.
+- Full-screen auxiliary panel behavior can depend on the conferencing app and macOS version;
+  use `--demo` and a real call to validate it on the target Mac.
 
-This repo is managed by [Mahler](https://github.com/mkny13/mahler). See [AGENTS.md](AGENTS.md) for build, verification, and autonomous agent conventions.
+## Planned Groundwork integration
+
+Groundwork does not currently generate MoveBreak routines, receive completions, provide
+credentials, or own persistence. The bundled catalog, local routine editor and shuffle,
+local JSONL history, and optional Notion sync are all shipped and remain active.
+
+[ROADMAP.md](ROADMAP.md) is the authoritative shipped/planned boundary. The planned migration
+is tracked by [issue #2](https://github.com/mkny13/movebreak/issues/2) and its dependent
+issues; future behavior described there should not be read as current setup guidance.
+
+## Agent workflows
+
+This repository is managed by [Mahler](https://github.com/mkny13/mahler). See
+[AGENTS.md](AGENTS.md) for repository build, verification, and autonomous-agent conventions.
