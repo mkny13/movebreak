@@ -1,5 +1,92 @@
 import AppKit
 
+/// Runs slow polling work one at a time and drops ticks while a poll is in flight.
+/// Pause/resume generations ensure a result begun before a lifecycle change is ignored.
+final class SerialPollScheduler {
+    private let queue: DispatchQueue
+    private let completionQueue: DispatchQueue
+    private let lock = NSLock()
+    private var isActive = false
+    private var isStopped = false
+    private var isInFlight = false
+    private var generation: UInt = 0
+
+    init(
+        queue: DispatchQueue = DispatchQueue(label: "com.mike.movebreak.detection", qos: .utility),
+        completionQueue: DispatchQueue = .main
+    ) {
+        self.queue = queue
+        self.completionQueue = completionQueue
+    }
+
+    func resume() {
+        lock.withLock {
+            guard !isStopped else { return }
+            generation &+= 1
+            isActive = true
+        }
+    }
+
+    func pause() {
+        lock.withLock {
+            generation &+= 1
+            isActive = false
+        }
+    }
+
+    func shutdown() {
+        lock.withLock {
+            generation &+= 1
+            isActive = false
+            isStopped = true
+        }
+    }
+
+    /// Returns false when the tick was skipped because polling is paused, stopped, or busy.
+    @discardableResult
+    func request<Input, Output>(
+        inspect: @escaping () -> Input,
+        accept: @escaping (Input) -> Output,
+        completion: @escaping (Output) -> Void
+    ) -> Bool {
+        let token: UInt? = lock.withLock {
+            guard isActive, !isStopped, !isInFlight else { return nil }
+            isInFlight = true
+            return generation
+        }
+        guard let token else { return false }
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            let input = inspect()
+
+            let output: Output? = self.lock.withLock {
+                defer { self.isInFlight = false }
+                guard self.isActive, !self.isStopped, self.generation == token else {
+                    return nil
+                }
+                return accept(input)
+            }
+
+            guard let output else { return }
+            self.completionQueue.async { [weak self] in
+                guard let self else { return }
+                let shouldDeliver = self.lock.withLock {
+                    self.isActive && !self.isStopped && self.generation == token
+                }
+                if shouldDeliver { completion(output) }
+            }
+        }
+        return true
+    }
+
+    /// Serializes non-poll detector mutations with classification acceptance.
+    func perform(_ work: @escaping () -> Void) {
+        let shouldSchedule = lock.withLock { !isStopped }
+        if shouldSchedule { queue.async(execute: work) }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let detector = SessionDetector()
@@ -7,10 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let routineWindow = RoutineWindowController()
     private let routineBuilder = RoutineBuilderWindowController()
     private let routineStore = RoutineStore.shared
+    private lazy var pollScheduler = SerialPollScheduler()
 
     private var statusItem: NSStatusItem?
     private var pollTimer: Timer?
     private var isPaused = false
+    private var detectedState: SessionState = .idle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
@@ -22,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             switch command {
             case .show:
-                let state = self.detector.state == .idle ? .meeting : self.detector.state
+                let state = self.detectedState == .idle ? .meeting : self.detectedState
                 self.prompt.show(for: state, routines: self.routineStore.resolvedRoutines)
             case .quit:
                 NSApplication.shared.terminate(nil)
@@ -78,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Updater.shared.isSafeToInstall = { [weak self] in
             guard let self else { return false }
             return !self.isPaused
-                && self.detector.state == .idle
+                && self.detectedState == .idle
                 && !self.prompt.isVisible
                 && !self.routineWindow.isVisible
                 && !self.routineBuilder.isVisible
@@ -89,12 +178,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func wirePromptCallbacks() {
         prompt.onChoose = { [weak self] routine in
             onMain {
-                self?.detector.recordRoutineStarted()
-                self?.routineWindow.show(routine.shuffledForSession())
+                guard let self else { return }
+                self.pollScheduler.perform { [detector = self.detector] in
+                    detector.recordRoutineStarted()
+                }
+                self.routineWindow.show(routine.shuffledForSession())
             }
         }
-        prompt.onDecline = { [weak self] in self?.detector.recordDecline() }
-        prompt.onTimeout = { [weak self] in self?.detector.recordTimeout() }
+        prompt.onDecline = { [weak self] in
+            guard let self else { return }
+            self.pollScheduler.perform { [detector = self.detector] in detector.recordDecline() }
+        }
+        prompt.onTimeout = { [weak self] in
+            guard let self else { return }
+            self.pollScheduler.perform { [detector = self.detector] in detector.recordTimeout() }
+        }
         routineWindow.onFinish = { routine, checkedIDs in
             SessionLogger.shared.logCompletion(routine: routine, checkedIDs: checkedIDs)
         }
@@ -103,21 +201,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Polling
 
     private func startPolling() {
+        pollScheduler.resume()
         pollTimer = Timer.scheduledTimer(
             withTimeInterval: Preferences.pollInterval, repeats: true
         ) { [weak self] _ in
             guard let self, !self.isPaused else { return }
-            // The AppleScript call inside can block briefly, so keep it off the main
-            // thread; the detector only calls back through onPromptDue.
-            DispatchQueue.global(qos: .utility).async {
-                let result = self.detector.poll()
-                DispatchQueue.main.async {
-                    self.updateStatusTitle(result.state)
-                    Updater.shared.installStagedUpdateIfPossible()
-                }
-            }
+            self.requestPoll()
         }
         pollTimer?.tolerance = 0.5
+    }
+
+    private func requestPoll() {
+        pollScheduler.request(
+            inspect: { [detector] in detector.inspect() },
+            accept: { [detector] classification in
+                detector.accept(classification)
+                return classification
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                self.detectedState = result.state
+                self.updateStatusTitle(result.state)
+                Updater.shared.installStagedUpdateIfPossible()
+            }
+        )
     }
 
     // MARK: - Menu bar
@@ -258,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let routine = routineStore.resolvedRoutines.first(where: { $0.key == key })
         else { return }
         prompt.dismiss(cancelTimer: true)
-        detector.recordRoutineStarted()
+        pollScheduler.perform { [detector] in detector.recordRoutineStarted() }
         routineWindow.show(routine.shuffledForSession())
     }
 
@@ -272,12 +379,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setPaused(_ paused: Bool) {
         isPaused = paused
+        if paused {
+            pollScheduler.pause()
+        } else {
+            pollScheduler.resume()
+        }
         statusItem?.menu?.item(withTag: MenuTag.pause.rawValue)?.title =
             paused ? "Resume Detection" : "Pause Detection"
         if paused {
             prompt.dismiss(cancelTimer: true)
         }
-        updateStatusTitle(detector.state)
+        updateStatusTitle(detectedState)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        pollScheduler.shutdown()
     }
 
     private func reportUnsupported() {
