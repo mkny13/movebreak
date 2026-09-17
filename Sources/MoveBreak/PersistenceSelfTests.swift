@@ -408,6 +408,87 @@ enum PersistenceSelfTests {
         return reporter.failureCount
     }
 
+    // MARK: - Saved Routine Persistence Cases
+
+    private static func runRoutineStoreCases() -> Int {
+        let reporter = SelfTestReporter()
+        let suiteName = "com.mike.movebreak.tests.routines.\(UUID().uuidString)"
+
+        guard let isolatedDefaults = UserDefaults(suiteName: suiteName) else {
+            reporter.check("routine-store UserDefaults suite is created", false)
+            return reporter.failureCount
+        }
+        defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
+
+        reporter.check(
+            "routine-store defaults domain starts absent",
+            isolatedDefaults.persistentDomain(forName: suiteName) == nil
+        )
+
+        let firstLaunchStore = RoutineStore(defaults: isolatedDefaults)
+        reporter.check(
+            "missing saved routines seed documented defaults",
+            firstLaunchStore.routines == RoutineStore.defaultSeeds
+        )
+
+        for routine in firstLaunchStore.routines {
+            firstLaunchStore.delete(routine.id)
+        }
+        let emptyReloadedStore = RoutineStore(defaults: isolatedDefaults)
+        reporter.check(
+            "deleting every routine remains empty after reload",
+            emptyReloadedStore.routines.isEmpty
+        )
+
+        let saved = SavedRoutine(
+            id: "saved-test-routine",
+            name: "Saved Test Routine",
+            exerciseIDs: [ExerciseCatalog.all[0].id]
+        )
+        guard let savedData = try? JSONEncoder().encode([saved]) else {
+            reporter.check("valid routine fixture encodes", false)
+            return reporter.failureCount
+        }
+        isolatedDefaults.set(savedData, forKey: "savedRoutines")
+        let validReloadedStore = RoutineStore(defaults: isolatedDefaults)
+        reporter.check(
+            "valid nonempty saved routines reload unchanged",
+            validReloadedStore.routines == [saved]
+        )
+
+        isolatedDefaults.set(Data("not valid routine JSON".utf8), forKey: "savedRoutines")
+        let malformedReloadedStore = RoutineStore(defaults: isolatedDefaults)
+        reporter.check(
+            "malformed saved routines recover to defaults",
+            malformedReloadedStore.routines == RoutineStore.defaultSeeds
+        )
+
+        let unresolved = SavedRoutine(
+            id: "unresolved-test-routine",
+            name: "Unresolved Test Routine",
+            exerciseIDs: ["removed-catalog-exercise"]
+        )
+        guard let unresolvedData = try? JSONEncoder().encode([unresolved]) else {
+            reporter.check("unresolved routine fixture encodes", false)
+            return reporter.failureCount
+        }
+        isolatedDefaults.set(unresolvedData, forKey: "savedRoutines")
+        let unresolvedReloadedStore = RoutineStore(defaults: isolatedDefaults)
+        reporter.check(
+            "unknown exercise IDs preserve valid saved routine data without seeding defaults",
+            unresolvedReloadedStore.routines == [unresolved]
+                && unresolvedReloadedStore.resolvedRoutines.isEmpty
+        )
+
+        isolatedDefaults.removePersistentDomain(forName: suiteName)
+        reporter.check(
+            "routine-store defaults domain is removed",
+            isolatedDefaults.persistentDomain(forName: suiteName) == nil
+        )
+
+        return reporter.failureCount
+    }
+
     // MARK: - Pending Sync Queue Failure Cases
 
     private static func drain(_ queue: DispatchQueue) -> Bool {
@@ -842,6 +923,9 @@ enum PersistenceSelfTests {
         print("")
         print("Self-test fixture isolation, failure reporting & resource cleanup")
         failures += runFixtureIsolationCases()
+        print("")
+        print("Saved routine persistence, empty state & malformed recovery")
+        failures += runRoutineStoreCases()
         print("")
         print("Local session directory (0700) & file permissions (0600)")
         failures += runSessionLoggerPermissionCases()
