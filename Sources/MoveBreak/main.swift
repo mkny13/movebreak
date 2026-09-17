@@ -47,9 +47,14 @@ if arguments.contains("--version") {
 }
 
 if arguments.contains("--check-update-now") {
-    Updater.shared.checkForUpdate()
-    // Give the check — and any staging download it kicks off — time to finish.
-    RunLoop.main.run(until: Date().addingTimeInterval(30))
+    var finished = false
+    Updater.shared.checkForUpdate {
+        finished = true
+    }
+    let deadline = Date().addingTimeInterval(30)
+    while !finished && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
     exit(0)
 }
 
