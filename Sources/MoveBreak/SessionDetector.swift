@@ -25,6 +25,108 @@ struct Classification {
     let inspections: [TabInspection]
 }
 
+/// Deterministic debounce and session bookkeeping. Keeping time and policy inputs here
+/// makes lifecycle behavior testable without CoreAudio, AppleScript, or wall-clock sleeps.
+struct SessionLifecycle {
+    struct Configuration {
+        let debouncePolls: Int
+        let sessionEndGrace: TimeInterval
+        let declineCooldown: TimeInterval
+        let timeoutCooldown: TimeInterval
+
+        static var current: Configuration {
+            Configuration(
+                debouncePolls: Preferences.debouncePolls,
+                sessionEndGrace: Preferences.sessionEndGrace,
+                declineCooldown: Preferences.declineCooldown,
+                timeoutCooldown: Preferences.timeoutCooldown
+            )
+        }
+    }
+
+    private let configuration: Configuration
+    private let now: () -> Date
+
+    private var candidateState: SessionState = .idle
+    private var candidateCount = 0
+    private(set) var state: SessionState = .idle
+    private(set) var sessionID = 0
+    private var sessionIsOpen = false
+    private var idleSince: Date?
+    private var promptedForSession: Int?
+    private var suppressedUntil: Date?
+
+    init(configuration: Configuration = .current, now: @escaping () -> Date = Date.init) {
+        self.configuration = configuration
+        self.now = now
+    }
+
+    /// Applies an observation and returns the active state when a prompt becomes due.
+    mutating func observe(_ observed: SessionState) -> SessionState? {
+        expireIdleGraceIfNeeded()
+
+        if observed == candidateState {
+            candidateCount += 1
+        } else {
+            candidateState = observed
+            candidateCount = 1
+        }
+
+        if candidateCount >= configuration.debouncePolls, state != candidateState {
+            let previous = state
+            state = candidateState
+
+            if state.isActive {
+                idleSince = nil
+                if !sessionIsOpen {
+                    sessionIsOpen = true
+                    sessionID += 1
+                }
+            } else if previous.isActive {
+                idleSince = now()
+            }
+        }
+
+        if state.isActive {
+            return promptIfDue()
+        }
+
+        expireIdleGraceIfNeeded()
+        return nil
+    }
+
+    private mutating func expireIdleGraceIfNeeded() {
+        guard state == .idle,
+              sessionIsOpen,
+              let idleSince,
+              now().timeIntervalSince(idleSince) > configuration.sessionEndGrace else {
+            return
+        }
+        sessionIsOpen = false
+        promptedForSession = nil
+        self.idleSince = nil
+    }
+
+    private mutating func promptIfDue() -> SessionState? {
+        if let suppressedUntil, now() < suppressedUntil { return nil }
+        if promptedForSession == sessionID { return nil }
+        promptedForSession = sessionID
+        return state
+    }
+
+    mutating func recordDecline() {
+        suppressedUntil = now().addingTimeInterval(configuration.declineCooldown)
+    }
+
+    mutating func recordTimeout() {
+        suppressedUntil = now().addingTimeInterval(configuration.timeoutCooldown)
+    }
+
+    mutating func recordRoutineStarted() {
+        promptedForSession = sessionID
+    }
+}
+
 /// Turns audio-stream state into session state, then into "should we prompt".
 ///
 /// Three stages, cheapest and most certain first:
@@ -38,20 +140,20 @@ final class SessionDetector {
     private let monitor = AudioActivityMonitor()
     private let tabInspector = BrowserTabInspector()
 
-    // Debounce: a candidate state must repeat before we believe it. Notification sounds
-    // open an output stream for a fraction of a second and would otherwise register.
-    private var candidateState: SessionState = .idle
-    private var candidateCount = 0
-    private(set) var state: SessionState = .idle
-
-    // Session lifecycle
-    private var idleSince: Date?
-    private(set) var sessionID = 0
-    private var promptedForSession: Int?
-    private var suppressedUntil: Date?
+    private var lifecycle: SessionLifecycle
 
     /// Called when a new session begins and we should prompt. Set by AppDelegate.
     var onPromptDue: ((SessionState) -> Void)?
+
+    init(
+        lifecycleConfiguration: SessionLifecycle.Configuration = .current,
+        now: @escaping () -> Date = Date.init
+    ) {
+        lifecycle = SessionLifecycle(configuration: lifecycleConfiguration, now: now)
+    }
+
+    var state: SessionState { lifecycle.state }
+    var sessionID: Int { lifecycle.sessionID }
 
     // MARK: - Polling
 
@@ -59,14 +161,14 @@ final class SessionDetector {
     /// `onPromptDue`.
     @discardableResult
     func poll() -> Classification {
-        RunningAppLookup.shared.invalidate()
-
-        let classification = classify()
-        apply(classification.state)
+        let classification = inspect()
+        accept(classification)
         return classification
     }
 
-    private func classify() -> Classification {
+    /// Performs the potentially slow I/O portion without mutating lifecycle state.
+    func inspect() -> Classification {
+        RunningAppLookup.shared.invalidate()
         let active = monitor.activeSnapshot()
         return Self.classify(
             processes: active,
@@ -176,66 +278,27 @@ final class SessionDetector {
 
     // MARK: - Debounce and session lifecycle
 
-    private func apply(_ observed: SessionState) {
-        if observed == candidateState {
-            candidateCount += 1
-        } else {
-            candidateState = observed
-            candidateCount = 1
+    /// Applies a completed inspection. The app's serial scheduler calls this only when
+    /// the poll still belongs to the current (unpaused) generation.
+    func accept(_ classification: Classification) {
+        if let promptState = lifecycle.observe(classification.state) {
+            onPromptDue?(promptState)
         }
-
-        guard candidateCount >= Preferences.debouncePolls, state != candidateState else {
-            trackIdleGrace()
-            return
-        }
-
-        let previous = state
-        state = candidateState
-
-        if state.isActive {
-            idleSince = nil
-            // A new session starts when we come up from idle. Meeting -> video (or the
-            // reverse) inside one continuous stretch is not a new session; you never got
-            // up, so you don't need a second prompt.
-            if !previous.isActive {
-                sessionID += 1
-            }
-            maybePrompt()
-        } else {
-            idleSince = Date()
-        }
-    }
-
-    /// The session isn't over the instant audio stops — a brief gap between meetings, or
-    /// a pause to answer a question, shouldn't re-arm the prompt.
-    private func trackIdleGrace() {
-        guard state == .idle, let idleSince else { return }
-        if Date().timeIntervalSince(idleSince) > Preferences.sessionEndGrace {
-            promptedForSession = nil
-            self.idleSince = nil
-        }
-    }
-
-    private func maybePrompt() {
-        if let suppressedUntil, Date() < suppressedUntil { return }
-        if promptedForSession == sessionID { return }
-        promptedForSession = sessionID
-        onPromptDue?(state)
     }
 
     // MARK: - Responses to the prompt
 
     func recordDecline() {
-        suppressedUntil = Date().addingTimeInterval(Preferences.declineCooldown)
+        lifecycle.recordDecline()
     }
 
     func recordTimeout() {
-        suppressedUntil = Date().addingTimeInterval(Preferences.timeoutCooldown)
+        lifecycle.recordTimeout()
     }
 
     /// A finished routine suppresses only until the next session, not on a clock.
     func recordRoutineStarted() {
-        promptedForSession = sessionID
+        lifecycle.recordRoutineStarted()
     }
 
     var isSupported: Bool { AudioActivityMonitor.isSupported }
