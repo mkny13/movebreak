@@ -274,6 +274,10 @@ defaults delete com.mike.movebreak musicPatterns
 defaults delete com.mike.movebreak
 ```
 
+The app also owns `savedRoutines` (JSON-encoded routine definitions) and
+`notionDatabaseID` (the non-secret Notion database identifier) in this domain. Treat
+`savedRoutines` as app-managed data rather than editing its encoded value with `defaults`.
+
 Invalid numeric values fall back to their built-in defaults:
 
 | Key | Accepted range | Default | Purpose |
