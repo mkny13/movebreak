@@ -370,10 +370,37 @@ Sources/MoveBreak/
   URLDisplay.swift            privacy-preserving URL formatting for console and diagnostics
   RemoteControl.swift         --show / --toggle-pause / --quit for when the status item
                                doesn't get a menu bar slot
+  SecretInput.swift           secure interactive terminal secret input with echo suppression
+  Keychain.swift              device-local macOS Keychain wrapper with typed errors
+  NotionSetup.swift           terminal workflow for configuring Notion credentials
+  NotionClient.swift          API client pushing completed sessions to Notion
+  SessionLogger.swift         owner-only (0700/0600) session history and atomic sync queue
+  SessionRecord.swift         session completion data model (Codable)
 ```
 
 Full Xcode is **not** needed — `swiftc` and the SwiftUI/AppKit SDKs in CommandLineTools are
 sufficient, and installing Xcode would only restore SwiftPM, which this project doesn't use.
+
+---
+
+## Credential Security & Local Data Storage
+
+MoveBreak enforces strict credential boundaries and owner-only local permissions to protect personal session and exercise completion data:
+
+### Secrets vs. Non-Secret Configuration
+
+- **Integration Secrets (Keychain):** API credentials (such as the Notion integration token or future Groundwork tokens) are stored exclusively in the macOS Keychain under service `com.mike.MoveBreak.notion` and account `integrationToken`. Items use the `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` accessibility class, ensuring they remain device-local (never synced to iCloud Keychain) and accessible across desktop screen locks. Secrets are never accepted as command-line arguments, never written to `UserDefaults`, and omitted from all logs and error diagnostics.
+- **Interactive Secret Entry (`SecretInput`):** Configured via `MoveBreak --configure-notion`. Terminal echo (`ECHO`) is disabled during interactive input, and signal handlers guarantee terminal attributes are restored even if interrupted via `SIGINT` (Ctrl+C), `SIGTERM`, or error. Piped/non-interactive stdin continues to be supported for testing without echoing or logging token values.
+- **Non-Secret Configuration (`UserDefaults`):** Database IDs (`notionDatabaseID`), audio bundle ID sets, and URL pattern matching lists are stored in `UserDefaults` under domain `com.mike.movebreak` with strict normalization, length limits, and numeric bounds validation.
+
+### Local Session Data & Storage Permissions
+
+- **Storage Location:** Local files reside in `~/Library/Application Support/MoveBreak/`.
+- **Directory Permissions:** The `MoveBreak` Application Support directory is created and enforced with POSIX permissions `0700` (`drwx------`), restricting access solely to the current user.
+- **Session History (`sessions.jsonl`):** Completed exercise routines are recorded in an append-only JSONL format with POSIX permissions `0600` (`-rw-------`).
+- **Offline Sync Queue (`pending-sync.json`):** Sessions pending upload are maintained with mode `0600` (`-rw-------`) and updated using atomic replacement (write-to-temporary and `rename`) to prevent corrupt writes on power loss or termination.
+- **Startup Hardening:** On initialization, `SessionLogger` tightens existing directory permissions to `0700` and scans contained files to enforce `0600`.
+- **Persistence Observability:** Persistence failures to local storage are observable and surfaced directly to callers as typed errors, preventing silent data loss or premature upload attempts.
 
 ---
 
