@@ -190,6 +190,195 @@ enum UpdateSelfTests {
         return reporter.failureCount
     }
 
+    // MARK: - Download Completion & Timeout Ownership Cases
+
+    private static func runDownloadLifecycleCases() -> Int {
+        let reporter = SelfTestReporter()
+        let fixture = SelfTestTemporaryDirectory(prefix: "movebreak-download-test")
+        do {
+            try fixture.create()
+        } catch {
+            reporter.check("download fixture directory is created", false, detail: "\(error)")
+            return reporter.failureCount
+        }
+
+        let sourceURL = URL(string: "https://github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip")!
+        func response(_ statusCode: Int) -> HTTPURLResponse {
+            HTTPURLResponse(url: sourceURL, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
+        }
+        func writeTemp(_ name: String, _ contents: String) -> URL {
+            let url = fixture.url.appendingPathComponent(name)
+            try? Data(contents.utf8).write(to: url)
+            return url
+        }
+        func contents(at url: URL) -> String? {
+            (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+
+        let successTemp = writeTemp("success.tmp", "archive-success")
+        let successDestination = fixture.url.appendingPathComponent("success.zip")
+        var observedRequest: URLRequest?
+        let successDownloader = UpdateDownloader(timeout: 1) { request, completion in
+            observedRequest = request
+            return UpdateDownloadOperation(
+                resume: { completion(successTemp, response(200), nil) },
+                cancel: {}
+            )
+        }
+        let successFailure = successDownloader.download(from: sourceURL, to: successDestination)
+        reporter.check(
+            "download success moves the temporary archive exactly once",
+            successFailure == nil && contents(at: successDestination) == "archive-success"
+        )
+        reporter.check(
+            "download request retains updater headers and transport timeout",
+            observedRequest?.value(forHTTPHeaderField: "User-Agent") == "MoveBreak-Updater"
+                && observedRequest?.timeoutInterval == 60
+        )
+
+        let httpTemp = writeTemp("http-failure.tmp", "server-error")
+        let httpDestination = writeTemp("http-failure.zip", "partial")
+        let httpDownloader = UpdateDownloader(timeout: 1) { _, completion in
+            UpdateDownloadOperation(
+                resume: { completion(httpTemp, response(503), nil) },
+                cancel: {}
+            )
+        }
+        let httpFailure = httpDownloader.download(from: sourceURL, to: httpDestination)
+        reporter.check(
+            "HTTP failure rejects the archive and removes destination artifacts",
+            httpFailure == "bad download response"
+                && !FileManager.default.fileExists(atPath: httpDestination.path)
+        )
+
+        let errorDestination = writeTemp("transport-failure.zip", "partial")
+        let transportError = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let errorDownloader = UpdateDownloader(timeout: 1) { _, completion in
+            UpdateDownloadOperation(
+                resume: { completion(nil, nil, transportError) },
+                cancel: {}
+            )
+        }
+        let transportFailure = errorDownloader.download(from: sourceURL, to: errorDestination)
+        reporter.check(
+            "transport failure is returned and removes destination artifacts",
+            transportFailure == transportError.localizedDescription
+                && !FileManager.default.fileExists(atPath: errorDestination.path)
+        )
+
+        let lateTemp = writeTemp("late-success.tmp", "too-late")
+        let lateDestination = fixture.url.appendingPathComponent("late-success.zip")
+        let callbackEntered = DispatchSemaphore(value: 0)
+        let allowCallback = DispatchSemaphore(value: 0)
+        let timeoutReturned = DispatchSemaphore(value: 0)
+        let timeoutResultLock = NSLock()
+        var timeoutResult: String?
+        let lateDownloader = UpdateDownloader(timeout: 0.01) { _, completion in
+            UpdateDownloadOperation(
+                resume: {},
+                cancel: {
+                    DispatchQueue.global().async {
+                        callbackEntered.signal()
+                        allowCallback.wait()
+                        completion(lateTemp, response(200), nil)
+                    }
+                }
+            )
+        }
+        DispatchQueue.global().async {
+            let result = lateDownloader.download(from: sourceURL, to: lateDestination)
+            timeoutResultLock.withLock { timeoutResult = result }
+            timeoutReturned.signal()
+        }
+        let cancellationStarted = callbackEntered.wait(timeout: .now() + 1) == .success
+        let waitedForCallback = timeoutReturned.wait(timeout: .now() + 0.05) == .timedOut
+        allowCallback.signal()
+        let drainedCallback = timeoutReturned.wait(timeout: .now() + 1) == .success
+        reporter.check(
+            "timeout cancellation drains a late success callback before returning",
+            cancellationStarted && waitedForCallback && drainedCallback
+                && timeoutResultLock.withLock { timeoutResult == "download timed out after 0.01 seconds" }
+                && !FileManager.default.fileExists(atPath: lateDestination.path)
+        )
+
+        let raceTemp = writeTemp("cancel-race.tmp", "cancel-race")
+        let raceDestination = fixture.url.appendingPathComponent("cancel-race.zip")
+        var cancellationCount = 0
+        let raceDownloader = UpdateDownloader(timeout: 0) { _, completion in
+            UpdateDownloadOperation(
+                resume: {},
+                cancel: {
+                    cancellationCount += 1
+                    completion(raceTemp, response(200), nil)
+                }
+            )
+        }
+        var repeatedRacesPassed = true
+        for _ in 0..<32 {
+            let raceFailure = raceDownloader.download(from: sourceURL, to: raceDestination)
+            repeatedRacesPassed = repeatedRacesPassed
+                && raceFailure == "download timed out after 0 seconds"
+                && !FileManager.default.fileExists(atPath: raceDestination.path)
+        }
+        reporter.check(
+            "repeated timeout callback-cancel races cannot move the destination",
+            repeatedRacesPassed && cancellationCount == 32
+        )
+
+        let firstTemp = writeTemp("first-completion.tmp", "first")
+        let secondTemp = writeTemp("second-completion.tmp", "second")
+        let repeatedDestination = fixture.url.appendingPathComponent("repeated.zip")
+        let repeatedDownloader = UpdateDownloader(timeout: 1) { _, completion in
+            UpdateDownloadOperation(
+                resume: {
+                    completion(firstTemp, response(200), nil)
+                    completion(secondTemp, response(200), nil)
+                },
+                cancel: {}
+            )
+        }
+        let repeatedFailure = repeatedDownloader.download(from: sourceURL, to: repeatedDestination)
+        reporter.check(
+            "repeated completion attempts preserve the first terminal result",
+            repeatedFailure == nil && contents(at: repeatedDestination) == "first"
+        )
+
+        let postReturnTemp = writeTemp("post-return.tmp", "post-return")
+        let postReturnDestination = fixture.url.appendingPathComponent("post-return.zip")
+        let allowRepeatedCompletion = DispatchSemaphore(value: 0)
+        let repeatedCompletionFinished = DispatchSemaphore(value: 0)
+        let postReturnDownloader = UpdateDownloader(timeout: 0) { _, completion in
+            UpdateDownloadOperation(
+                resume: {},
+                cancel: {
+                    completion(nil, nil, URLError(.cancelled))
+                    DispatchQueue.global().async {
+                        allowRepeatedCompletion.wait()
+                        completion(postReturnTemp, response(200), nil)
+                        repeatedCompletionFinished.signal()
+                    }
+                }
+            )
+        }
+        let postReturnFailure = postReturnDownloader.download(from: sourceURL, to: postReturnDestination)
+        allowRepeatedCompletion.signal()
+        let repeatedCompletionObserved = repeatedCompletionFinished.wait(timeout: .now() + 1) == .success
+        reporter.check(
+            "repeated late callback cannot create a destination after timeout returns",
+            postReturnFailure == "download timed out after 0 seconds"
+                && repeatedCompletionObserved
+                && !FileManager.default.fileExists(atPath: postReturnDestination.path)
+        )
+
+        do {
+            try fixture.cleanup()
+            reporter.check("download lifecycle temporary fixture is removed", true)
+        } catch {
+            reporter.check("download lifecycle temporary fixture is removed", false, detail: "\(error)")
+        }
+        return reporter.failureCount
+    }
+
     // MARK: - Automatic Update Trust Boundary & Verification Cases
 
     private static func runUpdateTrustCases() -> Int {
@@ -725,6 +914,9 @@ enum UpdateSelfTests {
         var failures = 0
         print("External command output, timeout, and pipe lifecycle")
         failures += runProcessRunnerCases()
+        print("")
+        print("Updater download completion and timeout ownership")
+        failures += runDownloadLifecycleCases()
         print("")
         print("Automatic update trust boundary, staging containment & code signature verification")
         failures += runUpdateTrustCases()
