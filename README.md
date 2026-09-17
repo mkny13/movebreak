@@ -162,6 +162,11 @@ the resolved browser tab URLs and which list they matched, and the final verdict
 whenever anything observable changes. Host-level summaries are printed by default to preserve
 privacy; pass `--verbose` if full URLs are needed.
 
+The two-second detector pass reads only each CoreAudio process object's input/output flags
+until it finds a live stream. PID and bundle identity are then resolved only for live
+objects. Missing bundle IDs use a small fallback cache keyed by CoreAudio object plus PID;
+entries survive consecutive polls, but expire after 10 seconds or when the object disappears.
+
 Walk through these to confirm real-world behavior:
 
 1. Idle desktop → `idle`

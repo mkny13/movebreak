@@ -26,7 +26,10 @@ and updater safety predicate.
 1. A main-run-loop timer requests a poll at the configured interval. `SerialPollScheduler`
    admits only one poll at a time and drops ticks while one is in flight.
 2. On its private utility queue, the detector reads CoreAudio's per-process input/output
-   stream flags. Helper bundle IDs are resolved to their owning application.
+   stream flags first. It resolves PID and bundle identity only for objects with a live
+   stream. Missing bundle IDs use a fallback identity cache keyed by CoreAudio object and
+   PID; entries expire after 10 seconds and are removed when the object disappears, bounding
+   reuse while preventing a recycled PID from silently inheriting stale identity.
 3. Classification applies the three stages below. Browser AppleScript runs only when a
    supported browser owns a live output stream; recent tab results have a short cache.
 4. The same serial scheduler accepts the observation into the debounced session lifecycle.

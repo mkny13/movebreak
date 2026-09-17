@@ -1,37 +1,33 @@
 import AppKit
+import CoreAudio
 import Foundation
 
-/// Maps PIDs to bundle identifiers, with a small cache.
-///
-/// CoreAudio reports an empty bundle ID for some processes (helper processes especially),
-/// so this fills the gap. The cache exists because the detector polls every 2s and
-/// `NSRunningApplication(processIdentifier:)` is not free.
+/// Bounded fallback identity cache, keyed by CoreAudio object and PID to reject PID reuse.
 final class RunningAppLookup {
     static let shared = RunningAppLookup()
-
-    private var cache: [pid_t: String?] = [:]
+    private struct Key: Hashable { let objectID: AudioObjectID; let pid: pid_t }
+    private struct Entry { let value: String?; let expires: Date }
+    private var cache: [Key: Entry] = [:]
     private let lock = NSLock()
+    private let lifetime: TimeInterval
+    private let now: () -> Date
+    private let resolve: (pid_t) -> String?
 
-    func bundleID(forPID pid: pid_t) -> String? {
-        lock.lock()
-        if let cached = cache[pid] {
-            lock.unlock()
-            return cached
-        }
-        lock.unlock()
-
-        let resolved = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-
-        lock.lock()
-        cache[pid] = resolved
-        lock.unlock()
-        return resolved
+    init(lifetime: TimeInterval = 10, now: @escaping () -> Date = Date.init,
+         resolve: @escaping (pid_t) -> String? = { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }) {
+        self.lifetime = lifetime; self.now = now; self.resolve = resolve
     }
 
-    /// PIDs get recycled, so the cache can't live forever. Called once per poll.
-    func invalidate() {
-        lock.lock()
-        cache.removeAll(keepingCapacity: true)
-        lock.unlock()
+    func bundleID(forPID pid: pid_t, objectID: AudioObjectID) -> String? {
+        let key = Key(objectID: objectID, pid: pid), instant = now()
+        if let hit = lock.withLock({ cache[key] }), hit.expires > instant { return hit.value }
+        let value = resolve(pid)
+        lock.withLock { cache[key] = Entry(value: value, expires: instant.addingTimeInterval(lifetime)) }
+        return value
+    }
+
+    func retain(objectIDs: Set<AudioObjectID>) {
+        let instant = now()
+        lock.withLock { cache = cache.filter { objectIDs.contains($0.key.objectID) && $0.value.expires > instant } }
     }
 }
