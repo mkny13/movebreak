@@ -379,6 +379,122 @@ enum DetectionSelfTests {
         return reporter.failureCount
     }
 
+    // MARK: - Cross-Browser Precedence Cases
+
+    private static func runCrossBrowserPrecedenceCases() -> Int {
+        let reporter = SelfTestReporter()
+        let safari = "com.apple.Safari"
+        let chrome = "com.google.Chrome"
+        let videoURL = "https://www.youtube.com/watch?v=cross-browser"
+        let meetingURL = "https://meet.google.com/abc-defg-hij"
+
+        func inspection(bundleID: String, verdict: TabVerdict, reason: String) -> TabInspection {
+            TabInspection(
+                bundleID: bundleID,
+                activeTabURL: nil,
+                allTabURLs: [],
+                verdict: verdict,
+                reason: reason,
+                scriptError: nil
+            )
+        }
+
+        func check(
+            _ name: String,
+            verdicts: [String: TabInspection],
+            expectedState: SessionState,
+            expectedInspections: [String],
+            expectedReason: String
+        ) {
+            // Multiple output streams for each owner model browser helper processes and
+            // guard both deterministic sorting and one inspection per owning browser.
+            let processes = [
+                AudioProcess(bundleID: "com.google.Chrome.helper.Renderer", isRunningOutput: true),
+                AudioProcess(bundleID: "com.apple.WebKit.WebContent", isRunningOutput: true),
+                AudioProcess(bundleID: "com.google.Chrome.helper", isRunningOutput: true),
+                AudioProcess(bundleID: "com.apple.WebKit.GPU", isRunningOutput: true),
+            ]
+            var callCounts: [String: Int] = [:]
+            var callOrder: [String] = []
+            let classification = SessionDetector.classify(
+                processes: processes,
+                ignoredApps: [],
+                meetingApps: [],
+                nativePlayers: [],
+                browsers: [safari, chrome],
+                tabInspector: { bundleID in
+                    callCounts[bundleID, default: 0] += 1
+                    callOrder.append(bundleID)
+                    return verdicts[bundleID]!
+                }
+            )
+            let inspectionOrder = classification.inspections.map(\.bundleID)
+            let noDuplicates = callCounts.values.allSatisfy { $0 == 1 }
+            reporter.record(
+                name,
+                passed: classification.state == expectedState
+                    && classification.reason == expectedReason
+                    && callOrder == expectedInspections
+                    && inspectionOrder == expectedInspections
+                    && noDuplicates,
+                details: [
+                    "expected \(expectedState) / \(expectedInspections) / \(expectedReason)",
+                    "got \(classification.state) / \(inspectionOrder) / \(classification.reason); calls \(callCounts)",
+                ]
+            )
+        }
+
+        check(
+            "later-sorted browser meeting outranks earlier video",
+            verdicts: [
+                safari: inspection(bundleID: safari, verdict: .video(videoURL), reason: "active tab is video"),
+                chrome: inspection(bundleID: chrome, verdict: .meeting(meetingURL), reason: "active tab is a call"),
+            ],
+            expectedState: .meeting,
+            expectedInspections: [safari, chrome],
+            expectedReason: "\(chrome): active tab is a call — meet.google.com/abc-defg-hij"
+        )
+
+        check(
+            "earlier-sorted browser meeting wins without duplicate inspection",
+            verdicts: [
+                safari: inspection(bundleID: safari, verdict: .meeting(meetingURL), reason: "active tab is a call"),
+                chrome: inspection(bundleID: chrome, verdict: .video(videoURL), reason: "active tab is video"),
+            ],
+            expectedState: .meeting,
+            expectedInspections: [safari],
+            expectedReason: "\(safari): active tab is a call — meet.google.com/abc-defg-hij"
+        )
+
+        check(
+            "video survives non-actionable verdict from another browser",
+            verdicts: [
+                safari: inspection(bundleID: safari, verdict: .video(videoURL), reason: "active tab is video"),
+                chrome: inspection(bundleID: chrome, verdict: .unknown, reason: "tabs are ambiguous"),
+            ],
+            expectedState: .video,
+            expectedInspections: [safari, chrome],
+            expectedReason: "\(safari): active tab is video — www.youtube.com/watch"
+        )
+
+        check(
+            "music and unknown browsers remain idle",
+            verdicts: [
+                safari: inspection(
+                    bundleID: safari,
+                    verdict: .music("https://relisten.net/phish/1997/11/17"),
+                    reason: "active tab is music"
+                ),
+                chrome: inspection(bundleID: chrome, verdict: .unknown, reason: "tabs are ambiguous"),
+            ],
+            expectedState: .idle,
+            expectedInspections: [safari, chrome],
+            expectedReason: "browser audio ignored — active tab is music"
+        )
+
+        return reporter.failureCount
+    }
+
     // MARK: - Numeric Preferences Regression Cases
 
     private static func runClassificationCases() -> Int {
@@ -541,6 +657,9 @@ enum DetectionSelfTests {
         print("")
         print("Exercise catalog + default routines")
         failures += runCatalogCases()
+        print("")
+        print("Cross-browser meeting precedence")
+        failures += runCrossBrowserPrecedenceCases()
         print("")
         print("Video vs music classification")
         failures += runClassificationCases()
