@@ -136,7 +136,18 @@ untouched.
 macOS 14.4 and linking only system frameworks. It runs the CLI self-test before assembling
 and ad-hoc signing the application bundle. The self-test coordinator checks its suite
 manifest and runs focused detection, persistence, credential/security, and updater suites
-without requiring browser automation or network access.
+without requiring browser automation or network access. Each reporter records its case count;
+the coordinator emits stable per-suite inventory and elapsed-time summaries plus a complete-run
+total while retaining zero/nonzero process exit semantics.
+
+The normal build gate deliberately performs one self-test run. The opt-in
+`scripts/test_health.sh` uses that already-built executable for repeated full-suite runs and
+compares their suite/case inventory to the first run. It rejects nonzero exits, unexpected
+stderr or runtime warnings, missing summaries, inventory drift, watchdog timeouts, and coarse
+duration regressions. Its default duration bound derives from the first-run baseline with a
+generous multiplier and fixed grace period; callers can override the repeat count, timeout,
+relative bound, or an explicit ceiling for slower automation hosts. The runner remains entirely
+offline and reports the slowest suite and complete run.
 
 ## Module inventory
 
@@ -203,8 +214,8 @@ Each tracked Swift source appears exactly once below.
 
 | Module | Responsibility |
 |---|---|
-| [`SelfTest.swift`](Sources/MoveBreak/SelfTest.swift) | Declares and runs the complete CLI self-test suite manifest. |
-| [`SelfTestSupport.swift`](Sources/MoveBreak/SelfTestSupport.swift) | Supplies reporters, assertions, temporary directories, and cleanup checks. |
+| [`SelfTest.swift`](Sources/MoveBreak/SelfTest.swift) | Declares and runs the complete CLI self-test suite manifest, timing each suite and the complete run. |
+| [`SelfTestSupport.swift`](Sources/MoveBreak/SelfTestSupport.swift) | Supplies reporters, case counting, assertions, temporary directories, and cleanup checks. |
 | [`DetectionSelfTests.swift`](Sources/MoveBreak/DetectionSelfTests.swift) | Tests identity resolution, tab rules, lifecycle policy, scheduling, and settings validation. |
 | [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests records, routine persistence, local history, permissions, and pending queues. |
 | [`SecuritySelfTests.swift`](Sources/MoveBreak/SecuritySelfTests.swift) | Tests secret input, Keychain behavior, credential boundaries, and URL redaction. |

@@ -543,33 +543,50 @@ enum PersistenceSelfTests {
         var callbackResults: [Result<SessionRecord, Error>] = []
         var operationDrained = false
         var lateCallbackCount = 0
-        testLogger.logCompletion(record: sampleRecord) { result in
-            callbackLock.withLock {
-                if operationDrained { lateCallbackCount += 1 }
-                callbackResults.append(result)
-            }
-        }
+        var operationDrainedInTime = false
+        var callbackDrainedInTime = false
+        var capturedFailureDiagnostic = ""
+        var captureError: Error?
+        do {
+            let output = try SelfTestSupport.captureOutput {
+                testLogger.logCompletion(record: sampleRecord) { result in
+                    callbackLock.withLock {
+                        if operationDrained { lateCallbackCount += 1 }
+                        callbackResults.append(result)
+                    }
+                }
 
-        let operationBarrier = DispatchSemaphore(value: 0)
-        loggerQueue.async {
-            callbackLock.withLock { operationDrained = true }
-            operationBarrier.signal()
+                let operationBarrier = DispatchSemaphore(value: 0)
+                loggerQueue.async {
+                    callbackLock.withLock { operationDrained = true }
+                    operationBarrier.signal()
+                }
+                operationDrainedInTime = operationBarrier.wait(timeout: .now() + 5) == .success
+
+                // A second barrier catches a callback that the operation queued behind the first
+                // barrier, allowing late delivery to be distinguished from missing delivery.
+                let callbackBarrier = DispatchSemaphore(value: 0)
+                loggerQueue.async { callbackBarrier.signal() }
+                callbackDrainedInTime = callbackBarrier.wait(timeout: .now() + 5) == .success
+            }
+            capturedFailureDiagnostic = output.stderr
+        } catch {
+            captureError = error
         }
-        let operationDrainResult = operationBarrier.wait(timeout: .now() + 5)
+        reporter.check(
+            "logCompletion failure diagnostic is captured by its test",
+            passed: captureError == nil
+                && capturedFailureDiagnostic.contains("SessionLogger persistence failure:"),
+            detail: captureError.map(String.init(describing:)) ?? capturedFailureDiagnostic
+        )
         reporter.check(
             "logCompletion persistence operation drains",
-            passed: operationDrainResult == .success,
+            passed: operationDrainedInTime,
             detail: "logger queue barrier timed out"
         )
-
-        // A second barrier catches a callback that the operation queued behind the first
-        // barrier, allowing late delivery to be distinguished from missing delivery.
-        let callbackBarrier = DispatchSemaphore(value: 0)
-        loggerQueue.async { callbackBarrier.signal() }
-        let callbackDrainResult = callbackBarrier.wait(timeout: .now() + 5)
         reporter.check(
             "logCompletion callback work drains",
-            passed: callbackDrainResult == .success,
+            passed: callbackDrainedInTime,
             detail: "logger callback barrier timed out"
         )
 

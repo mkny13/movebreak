@@ -77,7 +77,14 @@ enum SelfTestInfrastructureError: Error, CustomStringConvertible {
 }
 
 final class SelfTestReporter {
+    private static let caseCountLock = NSLock()
+    private static var recordedCaseCount = 0
+
     private(set) var failureCount = 0
+
+    static func caseCountSnapshot() -> Int {
+        caseCountLock.withLock { recordedCaseCount }
+    }
 
     func check(_ name: String, _ passed: Bool, detail: String = "") {
         record(name, passed: passed, details: detail.isEmpty ? [] : [detail])
@@ -97,6 +104,9 @@ final class SelfTestReporter {
         details: [String] = [],
         alwaysShowDetails: Bool = false
     ) {
+        SelfTestReporter.caseCountLock.withLock {
+            SelfTestReporter.recordedCaseCount += 1
+        }
         if !passed { failureCount += 1 }
         print("\(passed ? "✓" : "✗ FAIL")  \(name)")
         if !passed || alwaysShowDetails {
