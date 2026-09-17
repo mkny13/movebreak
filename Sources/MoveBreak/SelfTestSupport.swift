@@ -47,9 +47,15 @@ final class SelfTestTemporaryDirectory {
     }
 
     deinit {
-        // Explicit cleanup is required so failures can be reported by the owning test. This is
-        // only a last-resort attempt for an early return or an unexpected test bug.
-        try? cleanup()
+        // Explicit cleanup is required so failures can be reported by the owning test. This
+        // last-resort path prevents an unexpected early return from leaking a fixture, while a
+        // cleanup error still fails closed instead of disappearing.
+        do {
+            try cleanup()
+        } catch {
+            fputs("self-test fixture cleanup failed: \(error)\n", stderr)
+            abort()
+        }
     }
 }
 

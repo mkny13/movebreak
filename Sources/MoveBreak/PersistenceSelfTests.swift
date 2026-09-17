@@ -125,9 +125,7 @@ enum PersistenceSelfTests {
             reporter.check("UserDefaults test suite creation", passed: false)
             return 1
         }
-        defer {
-            testDefaults.removePersistentDomain(forName: suiteName)
-        }
+        reporter.check("Notion setup defaults domain starts absent", testDefaults.persistentDomain(forName: suiteName) == nil)
 
         Preferences.withDefaults(testDefaults) {
             // Case 1: Keychain failure prevents partial setup & does not leak token
@@ -196,12 +194,196 @@ enum PersistenceSelfTests {
 
                 reporter.check("NotionSetup succeeds with valid inputs", passed: exitCode == 0)
                 reporter.check("Database ID persisted on success", passed: Preferences.notionDatabaseID == sentinelDbID)
-                reporter.check("Sentinel token stored in Keychain", passed: (try? Keychain.get(forAccount: NotionClient.tokenAccount)) == sentinelToken)
+                do {
+                    reporter.check(
+                        "Sentinel token stored in Keychain",
+                        passed: try Keychain.get(forAccount: NotionClient.tokenAccount) == sentinelToken
+                    )
+                } catch {
+                    reporter.check("Sentinel token stored in Keychain", false, detail: "\(error)")
+                }
                 reporter.check("Sentinel token absent from stdout on success", passed: output?.stdout.contains(sentinelToken) == false)
                 reporter.check("Sentinel token absent from stderr on success", passed: output?.stderr.contains(sentinelToken) == false)
                 reporter.check("Success message printed on completion", passed: output?.stdout.contains("Saved. Completed routines will now log to Notion.") == true)
             }
         }
+
+        testDefaults.removePersistentDomain(forName: suiteName)
+        reporter.check(
+            "Notion setup defaults domain is removed",
+            testDefaults.persistentDomain(forName: suiteName) == nil
+        )
+
+        return reporter.failureCount
+    }
+
+    // MARK: - Harness Isolation and Failure-Path Regression Cases
+
+    private static func runFixtureIsolationCases() -> Int {
+        let reporter = SelfTestReporter()
+        let baselineDefaults = Preferences.defaults
+        let baselineKeychain = Keychain.backend
+        let suiteName = "com.mike.movebreak.tests.isolation.\(UUID().uuidString)"
+
+        guard let isolatedDefaults = UserDefaults(suiteName: suiteName) else {
+            reporter.check("fixture-isolation UserDefaults suite is created", false)
+            return reporter.failureCount
+        }
+        reporter.check("fixture-isolation defaults domain starts absent", isolatedDefaults.persistentDomain(forName: suiteName) == nil)
+
+        Preferences.withDefaults(isolatedDefaults) {
+            isolatedDefaults.set("success", forKey: "fixtureMarker")
+        }
+        reporter.check("UserDefaults override restores after success", Preferences.defaults === baselineDefaults)
+
+        var defaultsFailureObserved = false
+        do {
+            try Preferences.withDefaults(isolatedDefaults) {
+                throw NSError(domain: "SelfTestExpectedFailure", code: 1)
+            }
+        } catch {
+            defaultsFailureObserved = true
+        }
+        reporter.check(
+            "UserDefaults override restores after early failure",
+            defaultsFailureObserved && Preferences.defaults === baselineDefaults
+        )
+
+        let mockBackend = MockKeychainBackend()
+        Keychain.withBackend(mockBackend) {}
+        reporter.check("mock Keychain override restores after success", Keychain.backend === baselineKeychain)
+
+        var keychainFailureObserved = false
+        do {
+            try Keychain.withBackend(mockBackend) {
+                throw NSError(domain: "SelfTestExpectedFailure", code: 2)
+            }
+        } catch {
+            keychainFailureObserved = true
+        }
+        reporter.check(
+            "mock Keychain override restores after early failure",
+            keychainFailureObserved && Keychain.backend === baselineKeychain
+        )
+
+        isolatedDefaults.removePersistentDomain(forName: suiteName)
+        reporter.check(
+            "fixture-isolation defaults domain is removed",
+            isolatedDefaults.persistentDomain(forName: suiteName) == nil
+        )
+
+        let setupFailureParent = SelfTestTemporaryDirectory(prefix: "movebreak-setup-failure-parent")
+        do {
+            try setupFailureParent.create()
+            let blocker = setupFailureParent.url.appendingPathComponent("regular-file")
+            try Data("not a directory".utf8).write(to: blocker)
+            let failingFixture = SelfTestTemporaryDirectory(prefix: "child", baseURL: blocker)
+            var setupFailureObserved = false
+            do {
+                try failingFixture.create()
+            } catch {
+                setupFailureObserved = true
+            }
+            reporter.check(
+                "temporary fixture creation failure is observable",
+                setupFailureObserved && !FileManager.default.fileExists(atPath: failingFixture.url.path)
+            )
+            try failingFixture.cleanup()
+            try setupFailureParent.cleanup()
+            reporter.check(
+                "fixture creation failure leaves no temporary paths",
+                !FileManager.default.fileExists(atPath: setupFailureParent.url.path)
+            )
+        } catch {
+            reporter.check("temporary fixture creation failure regression setup succeeds", false, detail: "\(error)")
+            do {
+                try setupFailureParent.cleanup()
+            } catch {
+                reporter.check("fixture creation failure regression cleanup succeeds", false, detail: "\(error)")
+            }
+        }
+
+        let permissionFixture = SelfTestTemporaryDirectory(prefix: "movebreak-cleanup-permissions")
+        do {
+            try permissionFixture.create(permissions: 0o700)
+            guard chmod(permissionFixture.url.path, 0o000) == 0 else {
+                throw SelfTestInfrastructureError.posix(operation: "lock cleanup fixture", code: errno)
+            }
+            try permissionFixture.cleanup()
+            try permissionFixture.cleanup()
+            reporter.check(
+                "temporary cleanup restores permissions, removes the path, and is idempotent",
+                !FileManager.default.fileExists(atPath: permissionFixture.url.path)
+            )
+        } catch {
+            reporter.check("temporary cleanup restores permissions and removes the path", false, detail: "\(error)")
+        }
+
+        let cleanupFailureFixture = SelfTestTemporaryDirectory(prefix: "movebreak-cleanup-failure")
+        do {
+            try cleanupFailureFixture.create()
+            var cleanupFailureObserved = false
+            do {
+                try cleanupFailureFixture.cleanup { _ in
+                    throw NSError(domain: "SelfTestExpectedCleanupFailure", code: 1)
+                }
+            } catch {
+                cleanupFailureObserved = true
+            }
+            reporter.check(
+                "temporary cleanup failure is observable and retains the fixture for retry",
+                cleanupFailureObserved && FileManager.default.fileExists(atPath: cleanupFailureFixture.url.path)
+            )
+            try cleanupFailureFixture.cleanup()
+            reporter.check(
+                "temporary cleanup retry removes the fixture",
+                !FileManager.default.fileExists(atPath: cleanupFailureFixture.url.path)
+            )
+        } catch {
+            reporter.check("temporary cleanup failure regression fixture succeeds", false, detail: "\(error)")
+        }
+
+        let descriptorsBeforeFailure = SelfTestSupport.openFileDescriptorCount()
+        var captureBodyRan = false
+        var captureFailureObserved = false
+        do {
+            _ = try SelfTestSupport.captureOutput(pipeFactory: { _ in
+                errno = EMFILE
+                return -1
+            }) {
+                captureBodyRan = true
+            }
+        } catch {
+            captureFailureObserved = true
+        }
+        let descriptorsAfterFailure = SelfTestSupport.openFileDescriptorCount()
+        reporter.check(
+            "output-capture setup failure is observable and leak-free",
+            captureFailureObserved && !captureBodyRan && descriptorsAfterFailure == descriptorsBeforeFailure,
+            detail: "before=\(descriptorsBeforeFailure), after=\(descriptorsAfterFailure)"
+        )
+
+        let descriptorsBeforeCaptures = SelfTestSupport.openFileDescriptorCount()
+        var repeatedCapturesPassed = true
+        for index in 0..<20 {
+            do {
+                let output = try SelfTestSupport.captureOutput {
+                    print("capture-\(index)")
+                    FileHandle.standardError.write(Data("error-\(index)\n".utf8))
+                }
+                repeatedCapturesPassed = repeatedCapturesPassed
+                    && output.stdout == "capture-\(index)\n"
+                    && output.stderr == "error-\(index)\n"
+            } catch {
+                repeatedCapturesPassed = false
+            }
+        }
+        let descriptorsAfterCaptures = SelfTestSupport.openFileDescriptorCount()
+        reporter.check(
+            "repeated output captures restore streams and descriptor baseline",
+            repeatedCapturesPassed && descriptorsAfterCaptures == descriptorsBeforeCaptures,
+            detail: "before=\(descriptorsBeforeCaptures), after=\(descriptorsAfterCaptures)"
+        )
 
         return reporter.failureCount
     }
@@ -469,6 +651,9 @@ enum PersistenceSelfTests {
         print("")
         print("Notion setup failure propagation & credential boundaries")
         failures += runNotionSetupCases()
+        print("")
+        print("Self-test fixture isolation, failure reporting & resource cleanup")
+        failures += runFixtureIsolationCases()
         print("")
         print("Local session directory (0700) & file permissions (0600)")
         failures += runSessionLoggerPermissionCases()
