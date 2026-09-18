@@ -15,6 +15,16 @@ struct GroundworkDose: Codable, Equatable {
     let holdSeconds: Int?
     let side: String?
 
+    enum CodingKeys: String, CodingKey { case sets, reps, holdSeconds, side }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sets, forKey: .sets)
+        try container.encode(reps, forKey: .reps)
+        try container.encode(holdSeconds, forKey: .holdSeconds)
+        try container.encode(side, forKey: .side)
+    }
+
     func validate() throws {
         for value in [sets, reps, holdSeconds].compactMap({ $0 }) where value < 0 {
             throw GroundworkModelError.invalid("dose values must be nonnegative")
@@ -120,11 +130,147 @@ enum GroundworkProvenance: String, Codable {
     case local
 }
 
+struct GroundworkRoutineSnapshotItem: Codable, Equatable {
+    let itemID: String
+    let exerciseID: String?
+    let prescriptionID: String?
+    let name: String
+    let cues: [String]
+    let plannedDose: GroundworkDose?
+    let warnings: [GroundworkWarning]
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "itemId"
+        case exerciseID = "exerciseId"
+        case prescriptionID = "prescriptionId"
+        case name, cues, plannedDose, warnings
+    }
+
+    init(item: GroundworkRoutineItem) {
+        itemID = item.id
+        exerciseID = item.exerciseID
+        prescriptionID = item.prescriptionID
+        name = item.name
+        cues = item.cues
+        plannedDose = item.plannedDose
+        warnings = item.warnings
+    }
+
+    init(
+        itemID: String,
+        exerciseID: String?,
+        prescriptionID: String?,
+        name: String,
+        cues: [String],
+        plannedDose: GroundworkDose?,
+        warnings: [GroundworkWarning]
+    ) {
+        self.itemID = itemID
+        self.exerciseID = exerciseID
+        self.prescriptionID = prescriptionID
+        self.name = name
+        self.cues = cues
+        self.plannedDose = plannedDose
+        self.warnings = warnings
+    }
+}
+
+struct GroundworkRoutineSnapshot: Codable, Equatable {
+    let schemaVersion: Int
+    let routineID: String?
+    let title: String
+    let durationMinutes: Int
+    let locationID: String?
+    let posture: String?
+    let items: [GroundworkRoutineSnapshotItem]
+    let warnings: [GroundworkWarning]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case routineID = "routineId"
+        case title, durationMinutes
+        case locationID = "locationId"
+        case posture, items, warnings
+    }
+
+    init(routine: GroundworkRoutine) {
+        schemaVersion = GroundworkSchema.version
+        routineID = routine.id
+        title = routine.title
+        durationMinutes = routine.durationMinutes
+        locationID = routine.locationID
+        posture = routine.posture
+        items = routine.items.map(GroundworkRoutineSnapshotItem.init)
+        warnings = routine.warnings
+    }
+
+    init(
+        schemaVersion: Int = GroundworkSchema.version,
+        routineID: String?,
+        title: String,
+        durationMinutes: Int,
+        locationID: String?,
+        posture: String?,
+        items: [GroundworkRoutineSnapshotItem],
+        warnings: [GroundworkWarning]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.routineID = routineID
+        self.title = title
+        self.durationMinutes = durationMinutes
+        self.locationID = locationID
+        self.posture = posture
+        self.items = items
+        self.warnings = warnings
+    }
+
+    func validate(provenance: GroundworkProvenance) throws {
+        guard schemaVersion == GroundworkSchema.version else {
+            throw GroundworkModelError.unsupportedSchema(schemaVersion)
+        }
+        try requireNonempty([title], label: "routine snapshot")
+        guard (1...30).contains(durationMinutes), !items.isEmpty,
+              Set(items.map(\.itemID)).count == items.count else {
+            throw GroundworkModelError.invalid("routine snapshot duration/items are invalid")
+        }
+        for item in items {
+            try requireNonempty([item.itemID, item.name], label: "routine snapshot item")
+            guard item.cues.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw GroundworkModelError.invalid("routine snapshot contains an empty cue")
+            }
+            try item.plannedDose?.validate()
+            try item.warnings.forEach { try $0.validate() }
+            if provenance != .local {
+                guard let routineID, !routineID.isEmpty,
+                      let locationID, !locationID.isEmpty,
+                      let posture, !posture.isEmpty,
+                      item.exerciseID?.isEmpty == false,
+                      item.prescriptionID?.isEmpty == false,
+                      item.plannedDose != nil else {
+                    throw GroundworkModelError.invalid("generated snapshot is missing canonical mapping")
+                }
+            }
+        }
+        try warnings.forEach { try $0.validate() }
+    }
+}
+
 struct GroundworkActualDose: Codable, Equatable {
     let sets: Int?
     let reps: Int?
     let holdSeconds: Int?
     let side: String?
+
+    enum CodingKeys: String, CodingKey { case sets, reps, holdSeconds, side }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        // The wire contract distinguishes an unobserved measurement from a missing field.
+        try container.encode(sets, forKey: .sets)
+        try container.encode(reps, forKey: .reps)
+        try container.encode(holdSeconds, forKey: .holdSeconds)
+        try container.encode(side, forKey: .side)
+    }
 
     func validate() throws {
         for value in [sets, reps, holdSeconds].compactMap({ $0 }) where value < 0 {
@@ -159,7 +305,7 @@ struct GroundworkCompletionRequest: Codable, Equatable {
     let startedAt: Date
     let finishedAt: Date
     let provenance: GroundworkProvenance
-    let routine: GroundworkRoutine
+    let routineSnapshot: GroundworkRoutineSnapshot
     let checkedItemIDs: [String]
     let completedItems: [GroundworkCompletedItem]
     let warningOverrides: [GroundworkWarningOverride]
@@ -167,7 +313,7 @@ struct GroundworkCompletionRequest: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case clientSessionID = "clientSessionId"
-        case startedAt, finishedAt, provenance, routine
+        case startedAt, finishedAt, provenance, routineSnapshot
         case checkedItemIDs = "checkedItemIds"
         case completedItems, warningOverrides
     }
@@ -179,8 +325,8 @@ struct GroundworkCompletionRequest: Codable, Equatable {
         guard finishedAt >= startedAt else {
             throw GroundworkModelError.invalid("finish time precedes start time")
         }
-        try routine.validate()
-        let itemIDs = Set(routine.items.map(\.id))
+        try routineSnapshot.validate(provenance: provenance)
+        let itemIDs = Set(routineSnapshot.items.map(\.itemID))
         guard Set(checkedItemIDs).count == checkedItemIDs.count,
               Set(checkedItemIDs).isSubset(of: itemIDs) else {
             throw GroundworkModelError.invalid("checked item IDs must be unique members of the routine")
