@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let routineWindow = RoutineWindowController()
     private let routineBuilder = RoutineBuilderWindowController()
     private let routineStore = RoutineStore.shared
+    private let routineProvider = GroundworkRoutineProvider()
     private lazy var pollScheduler = SerialPollScheduler()
 
     private var statusItem: NSStatusItem?
@@ -112,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch command {
             case .show:
                 let state = self.detectedState == .idle ? .meeting : self.detectedState
-                self.prompt.show(for: state, routines: self.routineStore.resolvedRoutines)
+                self.showRoutineOffer(for: state)
             case .quit:
                 NSApplication.shared.terminate(nil)
             case .pause:
@@ -130,10 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--demo-pt") {
             wirePromptCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, let pt = self.routineStore.resolvedRoutines.first(where: { $0.key == "pt" })
-                    ?? self.routineStore.resolvedRoutines.first
-                else { return }
-                self.routineWindow.show(pt.shuffledForSession())
+                self?.routineWindow.show(Routines.demoGenerated)
             }
             return
         }
@@ -141,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             wirePromptCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self else { return }
-                self.prompt.show(for: .meeting, routines: self.routineStore.resolvedRoutines)
+                self.prompt.show(for: .meeting, offer: .generated(Routines.demoGenerated))
             }
             return
         }
@@ -158,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         detector.onPromptDue = { [weak self] state in
             onMain {
                 guard let self, !self.isPaused else { return }
-                self.prompt.show(for: state, routines: self.routineStore.resolvedRoutines)
+                self.showRoutineOffer(for: state)
             }
         }
         wirePromptCallbacks()
@@ -193,8 +191,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.pollScheduler.perform { [detector = self.detector] in detector.recordTimeout() }
         }
-        routineWindow.onFinish = { routine, checkedIDs in
-            SessionLogger.shared.logCompletion(routine: routine, checkedIDs: checkedIDs)
+        prompt.onDismiss = { [weak self] in
+            self?.routineProvider.cancel()
+        }
+        routineWindow.onFinish = { completion in
+            // Issue #7 switches delivery to the Groundwork outbox. Until then, preserve
+            // local JSONL + optional Notion behavior while exposing the full typed payload.
+            SessionLogger.shared.logCompletion(
+                routine: completion.routine,
+                checkedIDs: Set(completion.checkedItemIDs)
+            )
+        }
+    }
+
+    private func showRoutineOffer(for state: SessionState) {
+        let presentation = prompt.showLoading(for: state)
+        let localRoutines = routineStore.resolvedRoutines
+        routineProvider.requestOffer(localRoutines: localRoutines) { [weak self] _, offer in
+            guard let self else { return }
+            self.prompt.update(presentation, for: state, offer: offer)
         }
     }
 
@@ -323,15 +338,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.removeItem(at: index)
         }
 
+        let generated = NSMenuItem(
+            title: "Start Groundwork Break…",
+            action: #selector(startRoutine(_:)),
+            keyEquivalent: ""
+        )
+        generated.target = self
+        generated.representedObject = MenuTag.generatedRoutineKey
+        menu.insertItem(generated, at: 2)
+
         for (offset, routine) in routineStore.resolvedRoutines.enumerated() {
             let item = NSMenuItem(
-                title: routine.title,
+                title: "Local: \(routine.title)",
                 action: #selector(startRoutine(_:)),
                 keyEquivalent: ""
             )
             item.target = self
             item.representedObject = routine.key
-            menu.insertItem(item, at: 2 + offset)
+            menu.insertItem(item, at: 3 + offset)
         }
     }
 
@@ -340,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private enum MenuTag: Int {
+        static let generatedRoutineKey = "__groundwork__"
         case status = 1
         case pause = 2
         case routinesEnd = 3
@@ -361,7 +386,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func startRoutine(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String,
+        guard let key = sender.representedObject as? String else { return }
+        if key == MenuTag.generatedRoutineKey {
+            showRoutineOffer(for: detectedState)
+            return
+        }
+        guard
               let routine = routineStore.resolvedRoutines.first(where: { $0.key == key })
         else { return }
         prompt.dismiss(cancelTimer: true)
@@ -396,6 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pollTimer?.invalidate()
         pollTimer = nil
         pollScheduler.shutdown()
+        routineProvider.cancel()
     }
 
     private func reportUnsupported() {

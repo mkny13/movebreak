@@ -7,6 +7,17 @@ enum GroundworkSchema {
 enum GroundworkTreadmillSafety: String, Codable {
     case walkSafe = "walk_safe"
     case pauseBelt = "pause_belt"
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = GroundworkTreadmillSafety(rawValue: value) ?? .unknown
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 struct GroundworkDose: Codable, Equatable {

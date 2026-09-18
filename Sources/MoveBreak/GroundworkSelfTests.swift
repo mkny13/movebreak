@@ -358,6 +358,18 @@ enum GroundworkSelfTests {
                     && routine.exercises.first?.generated?.warnings.first?.ruleID == "rule-achilles"
                     && routine.exercises.first?.treadmill == .pauseTreadmill
             )
+            let unknownSafety = responseJSON.replacingOccurrences(of: "pause_belt", with: "future_safety_tag")
+            let unknownResponse = try GroundworkCoding.decoder().decode(
+                GroundworkRoutineResponse.self,
+                from: Data(unknownSafety.utf8)
+            )
+            let unknownRoutine = Routine(
+                generated: unknownResponse.routine!, provenance: .live, sourceLabel: "test"
+            )
+            reporter.check(
+                "unknown treadmill safety fails safe to pause belt",
+                unknownRoutine.exercises.first?.treadmill == .pauseTreadmill
+            )
 
             let sessionID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
             let started = Date(timeIntervalSince1970: 1_700_000_000)

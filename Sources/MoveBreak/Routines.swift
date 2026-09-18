@@ -96,4 +96,51 @@ enum Routines {
     static let disclaimer =
         "General movement prompts, not medical advice — stop anything that increases pain, "
         + "and defer to your PT."
+
+    /// Network-free fixture used by both demo entry points so visual UAT is deterministic.
+    static let demoGenerated: Routine = {
+        let warning = GroundworkWarning(
+            ruleID: "demo-neck",
+            message: "Stay within a comfortable range",
+            rationale: "This demo warning shows the clinical acknowledgement flow.",
+            source: "offline demo fixture"
+        )
+        let generated = GroundworkRoutine(
+            id: "demo-generated-routine",
+            title: "Offline Groundwork Demo",
+            durationMinutes: 5,
+            locationID: "demo-office",
+            posture: "standing",
+            items: [
+                GroundworkRoutineItem(
+                    id: "demo-shoulder-reset",
+                    exerciseID: "shoulder-reset",
+                    prescriptionID: "demo-rx-1",
+                    name: "Shoulder reset",
+                    cues: ["Let the shoulders drop", "Move slowly"],
+                    plannedDose: GroundworkDose(sets: 1, reps: 8, holdSeconds: nil, side: "bilateral"),
+                    inclusionReasons: ["desk posture", "short meeting break"],
+                    treadmillSafety: .walkSafe,
+                    warnings: []
+                ),
+                GroundworkRoutineItem(
+                    id: "demo-neck-turn",
+                    exerciseID: "neck-turn",
+                    prescriptionID: "demo-rx-2",
+                    name: "Supported neck turn",
+                    cues: ["Pause the belt", "Turn only as far as comfortable"],
+                    plannedDose: GroundworkDose(sets: nil, reps: 4, holdSeconds: 3, side: "each_side"),
+                    inclusionReasons: ["active clinical gate", "neck mobility"],
+                    treadmillSafety: .pauseBelt,
+                    warnings: [warning]
+                ),
+            ],
+            warnings: []
+        )
+        return Routine(
+            generated: generated,
+            provenance: .cached,
+            sourceLabel: "Deterministic offline demo — not clinically revalidated"
+        )
+    }()
 }

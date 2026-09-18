@@ -1,8 +1,8 @@
 # MoveBreak architecture
 
 This document is the canonical description of MoveBreak's shipped implementation. It
-describes the current code, including dormant Groundwork transport infrastructure, rather
-than later HUD and completion-sync behavior. See [ROADMAP.md](ROADMAP.md)
+describes the current code, including the Groundwork-generated HUD path, rather than later
+completion-sync behavior. See [ROADMAP.md](ROADMAP.md)
 for future work and [README.md](README.md) for user setup, operation, and troubleshooting.
 
 ## Runtime boundary and entry points
@@ -18,7 +18,7 @@ remote-control flags terminate without entering the long-running app. Demo and s
 flags instead modify an app launch. Normal launch creates `AppDelegate`, selects accessory
 activation policy (no Dock icon), and enters the AppKit run loop.
 
-`AppDelegate` is the composition root. It owns the detector, routine store, three panel
+`AppDelegate` is the composition root. It owns the detector, routine store and provider, three panel
 controllers, status item, timer, and polling scheduler; wires prompt completion into the
 shared session logger; registers the remote-control listener; and supplies the updater's
 idle predicate. At launch it asks the logger to retry pending Notion work before checking
@@ -39,12 +39,19 @@ do not start polling or updates. The three demo modes also return before polling
 4. The same serial scheduler accepts the observation into the debounced session lifecycle.
    A generation token discards work begun before pause, resume, or shutdown.
 5. When one prompt is due for the open session, the callback crosses to the main queue and
-   presents every nonempty saved local routine. Decline and timeout choices update cooldown
-   state on the detection queue. Manual menu and remote `--show` requests bypass detection;
-   `--show` labels an idle detector state as a meeting for prompt copy.
-6. Choosing a routine marks the session prompted, partitions a per-session shuffle into
-   walk-safe work followed by pause-belt work, and opens the checklist panel.
-7. Pressing Done closes the checklist and captures the checked exercise IDs. The session
+   presents loading state while the provider requests one configured-duration Groundwork
+   routine. Manual menu and remote `--show` requests use the same path; no request occurs in
+   audio polling or at startup. Cancellation plus presentation generations discard results
+   after close, timeout, replacement, or routine start.
+6. A live or cached generated response becomes one numbered offer. Empty, auth, malformed,
+   unavailable, unconfigured, and local-fallback states are labeled distinctly; saved local
+   routines remain selectable fallback content. Generated items preserve server order, while
+   local starts still partition-shuffle walk-safe work before pause-belt work.
+7. The checklist displays authored dose/cues, inclusion reasons, treadmill safety, and warning
+   message/rationale/source. A checked generated item explicitly confirms its displayed dose;
+   editable deviation fields retain only entered observations, and warnings affecting checked
+   work require a reason. Pressing Done emits one structured per-run completion with stable UUID,
+   timestamps, snapshot, canonical checked IDs, actual dose, and warning overrides. The session
    logger then appends a record to local JSONL before attempting Notion delivery; a failed
    upload is added to the local pending queue and launch retries pending entries. The current
    UI does not wait for or surface the local-write result; failures are written to stderr.
@@ -80,7 +87,9 @@ AppKit creation and mutation belong on the main thread. `FloatingPanel` asserts 
 initializer runs there, and detector callbacks use `onMain` before touching panel or status
 UI. The polling scheduler owns slow CoreAudio/AppleScript inspection and serializes all
 detector lifecycle mutations on one utility queue; accepted results return to the main queue.
-Prompt decline, timeout, and routine-start mutations are sent to that same queue. The session
+Provider URLSession callbacks and cache resolution return through `onMain`; prompt presentation
+IDs and provider generations suppress stale UI mutations. Prompt decline, timeout, and
+routine-start mutations are sent to the detection queue. The session
 logger has a separate serial queue for history and pending-queue mutation; URLSession
 completions dispatch mutations back to it. Updater network callbacks return to the main queue,
 while archive download and verification run on a utility queue. Download completion has one
@@ -102,11 +111,12 @@ undecodable saved data restores the three seeds. Empty individual routines remai
 but are omitted from the prompt and menu, and missing catalog IDs are skipped during
 resolution.
 
-Resolved routines copy catalog exercises into the display model. Each launch shuffles
+Resolved local routines copy catalog exercises into the display model. Each local launch shuffles
 walk-safe and pause-belt partitions independently while keeping the safe partition first.
-The checklist groups exercises by the order in which each area first appears and preserves
+The local checklist groups exercises by the order in which each area first appears and preserves
 relative order within an area; this grouping can move later exercises next to earlier ones in
-the same area. Done reports only explicitly checked IDs and may report an empty completion.
+the same area. Generated routines bypass both shuffle and area grouping so canonical item order
+survives display and completion. Unknown treadmill safety is treated conservatively as pause-belt.
 The static catalog, local routine editor, and saved routines are live product behavior, not
 dead abstractions; their role during Groundwork migration is defined in the roadmap.
 
@@ -125,8 +135,8 @@ database ID to preferences. The generic-password item uses account `integrationT
 values. The client sends completed session summaries directly to Notion's page-creation API
 over HTTPS.
 
-Groundwork setup is available through `--configure-groundwork`, but the current UI does not
-yet call the integration. Setup accepts HTTPS deployment roots (or explicit loopback HTTP for
+Groundwork setup is available through `--configure-groundwork`, and prompt/manual invocations
+use it to request generated routines. Setup accepts HTTPS deployment roots (or explicit loopback HTTP for
 development), an existing location ID, and a 1–30 minute default. It commits non-secret values
 to preferences only after writing the token to the separate
 `com.mike.MoveBreak.groundwork` Keychain service, under an account derived from the exact
@@ -142,7 +152,9 @@ can be forwarded. Successful nonempty routines can be atomically cached under
 location, and duration. Offline cache labels include their timestamp and explicitly say they
 were not revalidated; corrupt, absent, auth-failed, malformed, unavailable, live-empty, and
 unconfigured states remain distinct. Live empty results are never replaced by cached or
-bundled content. No refresh occurs at startup or from the audio polling loop in this slice.
+bundled content. No refresh occurs at startup or from the audio polling loop. Completion delivery
+to Groundwork remains issue #7 scope; the generated HUD exposes the typed payload while preserving
+the existing local-history/Notion path.
 
 Local session data lives under `~/Library/Application Support/MoveBreak/`. The directory is
 created or tightened to mode `0700`; contained files are tightened to `0600`.
@@ -242,10 +254,11 @@ Each tracked Swift source appears exactly once below.
 |---|---|
 | [`ExerciseCatalog.swift`](Sources/MoveBreak/ExerciseCatalog.swift) | Defines exercise, posture, and treadmill models and the bundled static catalog. |
 | [`Routines.swift`](Sources/MoveBreak/Routines.swift) | Defines resolved routines, session shuffling, and the user-facing disclaimer. |
+| [`RoutineCompletion.swift`](Sources/MoveBreak/RoutineCompletion.swift) | Builds idempotent structured per-run completions with explicit actual dose and warning reasons. |
 | [`RoutineStore.swift`](Sources/MoveBreak/RoutineStore.swift) | Persists editable saved routines, seeds defaults, and resolves catalog IDs. |
 | [`FloatingPanel.swift`](Sources/MoveBreak/FloatingPanel.swift) | Defines the non-activating AppKit host panel and full-screen placement behavior. |
-| [`PromptPanel.swift`](Sources/MoveBreak/PromptPanel.swift) | Presents numbered routine choices and decline/timeout behavior. |
-| [`RoutineWindow.swift`](Sources/MoveBreak/RoutineWindow.swift) | Presents the self-paced checklist and emits checked exercise IDs on Done. |
+| [`PromptPanel.swift`](Sources/MoveBreak/PromptPanel.swift) | Presents loading/error/offline/empty states, numbered choices, and generation-safe dismissal. |
+| [`RoutineWindow.swift`](Sources/MoveBreak/RoutineWindow.swift) | Presents ordered clinical context, warning reasons, and actual-dose capture in the checklist. |
 | [`RoutineBuilderWindow.swift`](Sources/MoveBreak/RoutineBuilderWindow.swift) | Presents local routine create/rename/delete and catalog selection UI. |
 
 ### Completion persistence and Notion
@@ -266,6 +279,7 @@ Each tracked Swift source appears exactly once below.
 | [`GroundworkModels.swift`](Sources/MoveBreak/GroundworkModels.swift) | Defines and validates versioned routine, dose, warning, provenance, completion, and receipt wire models. |
 | [`GroundworkClient.swift`](Sources/MoveBreak/GroundworkClient.swift) | Builds authenticated GET/POST requests, maps typed failures, supports cancellation, and enforces redirect-origin policy. |
 | [`GroundworkRoutineCache.swift`](Sources/MoveBreak/GroundworkRoutineCache.swift) | Atomically stores validated nonempty routines and resolves explicit live, empty, offline, corrupt, and fallback states. |
+| [`GroundworkRoutineProvider.swift`](Sources/MoveBreak/GroundworkRoutineProvider.swift) | Fetches on prompt/manual invocation and maps cancellable live/cache/local availability into HUD offers. |
 | [`GroundworkSetup.swift`](Sources/MoveBreak/GroundworkSetup.swift) | Validates interactive Groundwork configuration and stores origin-bound credentials. |
 
 ### Updates and process execution
