@@ -1,8 +1,8 @@
 # MoveBreak architecture
 
 This document is the canonical description of MoveBreak's shipped implementation. It
-describes the current code, including the Groundwork-generated HUD path, rather than later
-completion-sync behavior. See [ROADMAP.md](ROADMAP.md)
+describes the current code, including the Groundwork-generated HUD and durable completion
+path. See [ROADMAP.md](ROADMAP.md)
 for future work and [README.md](README.md) for user setup, operation, and troubleshooting.
 
 ## Runtime boundary and entry points
@@ -13,7 +13,7 @@ Foundation/Security for persistence, networking, subprocesses, and Keychain acce
 no service process, database, Xcode project, Swift package, or third-party dependency.
 
 The executable first rejects command-line secrets. Help, version, self-test, browser-tab
-probe, live diagnostics, interactive Notion or Groundwork setup, one-shot update check, and same-user
+probe, live diagnostics, interactive Groundwork setup, one-shot update check, and same-user
 remote-control flags terminate without entering the long-running app. Demo and status-check
 flags instead modify an app launch. Normal launch creates `AppDelegate`, selects accessory
 activation policy (no Dock icon), and enters the AppKit run loop.
@@ -21,8 +21,8 @@ activation policy (no Dock icon), and enters the AppKit run loop.
 `AppDelegate` is the composition root. It owns the detector, routine store and provider, three panel
 controllers, status item, timer, and polling scheduler; wires prompt completion into the
 shared session logger; registers the remote-control listener; and supplies the updater's
-idle predicate. At launch it asks the logger to retry pending Notion work before checking
-CoreAudio support. Unsupported systems keep the status item and remote-control listener but
+idle predicate. At launch it reconciles structured local history into the Groundwork outbox
+and begins eligible delivery before checking CoreAudio support. Unsupported systems keep the status item and remote-control listener but
 do not start polling or updates. The three demo modes also return before polling and updates.
 
 ## Observation-to-completion data flow
@@ -52,9 +52,10 @@ do not start polling or updates. The three demo modes also return before polling
    editable deviation fields retain only entered observations, and warnings affecting checked
    work require a reason. Pressing Done emits one structured per-run completion with stable UUID,
    timestamps, snapshot, canonical checked IDs, actual dose, and warning overrides. The session
-   logger then appends a record to local JSONL before attempting Notion delivery; a failed
-   upload is added to the local pending queue and launch retries pending entries. The current
-   UI does not wait for or surface the local-write result; failures are written to stderr.
+   logger durably appends the complete snapshot and destination origin to local JSONL, then
+   atomically adds it to a separate versioned Groundwork outbox. Done closes the HUD only after
+   both writes succeed; a disk error stays visible and retryable in the checklist. Delivery is
+   asynchronous and never runs from the detector polling path.
 
 ## Detection and classification
 
@@ -89,9 +90,9 @@ UI. The polling scheduler owns slow CoreAudio/AppleScript inspection and seriali
 detector lifecycle mutations on one utility queue; accepted results return to the main queue.
 Provider URLSession callbacks and cache resolution return through `onMain`; prompt presentation
 IDs and provider generations suppress stale UI mutations. Prompt decline, timeout, and
-routine-start mutations are sent to the detection queue. The session
-logger has a separate serial queue for history and pending-queue mutation; URLSession
-completions dispatch mutations back to it. Updater network callbacks return to the main queue,
+routine-start mutations are sent to the detection queue. The session logger serializes history
+writes, while the outbox serializes atomic state changes and one in-flight Groundwork request;
+URLSession completions dispatch back to the outbox queue. Updater network callbacks return to the main queue,
 while archive download and verification run on a utility queue. Download completion has one
 locked terminal outcome; a timeout cancels and drains the URLSession callback before staging
 cleanup, so late or repeated callbacks cannot write the archive. Installation is gated on the
@@ -122,18 +123,11 @@ dead abstractions; their role during Groundwork migration is defined in the road
 
 ## Configuration, credentials, and persistence
 
-`Preferences` reads and normalizes detection lists, URL patterns, timing values, and the
-Notion database ID from the app's `com.mike.movebreak` `UserDefaults` domain. Invalid or
+`Preferences` reads and normalizes detection lists, URL patterns, timing values, and non-secret
+Groundwork settings from the app's `com.mike.movebreak` `UserDefaults` domain. Invalid or
 empty normalized overrides fall back to built-in values; numeric settings are bounded, and
 the browser list cannot expand beyond implementations with a known AppleScript dialect.
 `RoutineStore` uses the same defaults domain under its JSON-encoded `savedRoutines` key.
-
-The current optional remote integration is Notion. Interactive setup writes the integration
-token to the device-local Keychain service `com.mike.MoveBreak.notion` and the non-secret
-database ID to preferences. The generic-password item uses account `integrationToken` and
-`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Tokens are not accepted as command-line
-values. The client sends completed session summaries directly to Notion's page-creation API
-over HTTPS.
 
 Groundwork setup is available through `--configure-groundwork`, and prompt/manual invocations
 use it to request generated routines. Setup accepts HTTPS deployment roots (or explicit loopback HTTP for
@@ -152,22 +146,24 @@ can be forwarded. Successful nonempty routines can be atomically cached under
 location, and duration. Offline cache labels include their timestamp and explicitly say they
 were not revalidated; corrupt, absent, auth-failed, malformed, unavailable, live-empty, and
 unconfigured states remain distinct. Live empty results are never replaced by cached or
-bundled content. No refresh occurs at startup or from the audio polling loop. Completion delivery
-to Groundwork remains issue #7 scope; the generated HUD exposes the typed payload while preserving
-the existing local-history/Notion path.
+bundled content. No routine refresh occurs at startup or from the audio polling loop.
 
 Local session data lives under `~/Library/Application Support/MoveBreak/`. The directory is
 created or tightened to mode `0700`; contained files are tightened to `0600`.
-`sessions.jsonl` is append-only local history and is written before a network request.
-`pending-sync.json` is a JSON array replaced atomically within the same directory after a
-Notion failure. Missing queue files represent an empty queue, while unreadable or malformed
-queue files fail closed: retry, add, and remove operations leave the existing file untouched
-and emit a payload-free diagnostic. Every delivery failure is queued, including absent
-credentials and permanent HTTP errors; retries occur at launch without backoff or user-facing
-queue state. The current queue is best-effort: a crash after the history append but before
-failed delivery is enqueued is not reconciled automatically, and directory permission/setup
-errors are attempted rather than made fatal. Durable Groundwork outbox work is intentionally
-future scope.
+`sessions.jsonl` is append-only local history and is synchronized before acknowledgement or
+network work. New records embed the structured completion, stable client UUID, and destination
+origin; missing optional fields keep old JSONL lines readable and prevent historical upload.
+`groundwork-outbox-v1.json` is replaced atomically and contains origin-bound work plus a durable
+receipt ledger. Launch reconciliation repairs a crash between history and outbox writes without
+reinterpreting or touching the legacy `pending-sync.json` Notion queue. A validated matching
+receipt removes work and records its UUID; a lost response safely retries the same UUID.
+
+Network/429/5xx failures use bounded exponential backoff with jitter and honor `Retry-After`.
+Authentication pauses until explicit retry after reconfiguration; permanent 400/409 and malformed
+responses remain visible without a tight loop. The menu reports pending/failed counts and provides
+explicit retry. Unconfigured records bind only on that explicit action; records already bound to
+another origin are never reassigned. Legacy Notion files, preferences, and Keychain items are left
+on disk but no active code reads, writes, or uploads them.
 
 ## Automatic-update trust boundary
 
@@ -246,7 +242,7 @@ Each tracked Swift source appears exactly once below.
 | [`Diagnose.swift`](Sources/MoveBreak/Diagnose.swift) | Runs the live audio/tab/classification diagnostic table. |
 | [`TabProbe.swift`](Sources/MoveBreak/TabProbe.swift) | Runs one-shot inspection of supported running browsers. |
 | [`URLDisplay.swift`](Sources/MoveBreak/URLDisplay.swift) | Sanitizes diagnostic URLs to privacy-preserving display strings. |
-| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides plus non-secret Notion and Groundwork preferences. |
+| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides plus non-secret Groundwork preferences. |
 
 ### Routine domain and UI
 
@@ -261,14 +257,13 @@ Each tracked Swift source appears exactly once below.
 | [`RoutineWindow.swift`](Sources/MoveBreak/RoutineWindow.swift) | Presents ordered clinical context, warning reasons, and actual-dose capture in the checklist. |
 | [`RoutineBuilderWindow.swift`](Sources/MoveBreak/RoutineBuilderWindow.swift) | Presents local routine create/rename/delete and catalog selection UI. |
 
-### Completion persistence and Notion
+### Completion persistence and Groundwork
 
 | Module | Responsibility |
 |---|---|
-| [`SessionRecord.swift`](Sources/MoveBreak/SessionRecord.swift) | Codable local completion summary model. |
-| [`SessionLogger.swift`](Sources/MoveBreak/SessionLogger.swift) | Serial local JSONL writes, protected file modes, Notion delivery, and atomic pending-sync queue updates. |
-| [`NotionClient.swift`](Sources/MoveBreak/NotionClient.swift) | Builds and sends current Notion page-creation requests. |
-| [`NotionSetup.swift`](Sources/MoveBreak/NotionSetup.swift) | Runs interactive token/database configuration. |
+| [`SessionRecord.swift`](Sources/MoveBreak/SessionRecord.swift) | Backward-compatible local summary plus optional structured completion and destination. |
+| [`SessionLogger.swift`](Sources/MoveBreak/SessionLogger.swift) | Serial durable JSONL writes and launch reconciliation into the outbox. |
+| [`GroundworkOutbox.swift`](Sources/MoveBreak/GroundworkOutbox.swift) | Owns atomic origin-bound queue state, receipts, failure classification, backoff, and retry status. |
 | [`Keychain.swift`](Sources/MoveBreak/Keychain.swift) | Wraps device-local Keychain storage behind typed errors and a testable backend. |
 | [`SecretInput.swift`](Sources/MoveBreak/SecretInput.swift) | Reads terminal secrets with echo disabled and signal-safe restoration. |
 
@@ -298,7 +293,7 @@ Each tracked Swift source appears exactly once below.
 | [`SelfTest.swift`](Sources/MoveBreak/SelfTest.swift) | Declares and runs the complete CLI self-test suite manifest, timing each suite and the complete run. |
 | [`SelfTestSupport.swift`](Sources/MoveBreak/SelfTestSupport.swift) | Supplies reporters, case counting, assertions, temporary directories, and cleanup checks. |
 | [`DetectionSelfTests.swift`](Sources/MoveBreak/DetectionSelfTests.swift) | Tests identity resolution, tab rules, lifecycle policy, scheduling, and settings validation. |
-| [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests records, routine persistence, local history, permissions, and pending queues. |
+| [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests record compatibility, persistence boundaries, recovery, retries, origin binding, and legacy isolation. |
 | [`SecuritySelfTests.swift`](Sources/MoveBreak/SecuritySelfTests.swift) | Tests secret input, Keychain behavior, credential boundaries, and URL redaction. |
 | [`UpdateSelfTests.swift`](Sources/MoveBreak/UpdateSelfTests.swift) | Tests download completion races plus release, archive, bundle, staging, signer, and subprocess update boundaries. |
 | [`GroundworkSelfTests.swift`](Sources/MoveBreak/GroundworkSelfTests.swift) | Tests the offline wire contract, request/failure boundary, redirect policy, cache provenance, and setup isolation. |

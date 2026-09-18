@@ -74,7 +74,7 @@ struct GroundworkOrigin: Codable, Equatable, Hashable {
 enum GroundworkClientError: Error, Equatable {
     case invalidConfiguration(String)
     case authentication
-    case retryable(status: Int?)
+    case retryable(status: Int?, retryAfter: TimeInterval? = nil)
     case permanent(status: Int)
     case malformedResponse
     case unsupportedSchema(Int)
@@ -198,14 +198,18 @@ final class GroundworkClient {
         if let urlError = error as? URLError {
             if urlError.code == .cancelled { return .failure(.cancelled) }
             if urlError.code == .timedOut { return .failure(.timedOut) }
-            return .failure(.retryable(status: nil))
+            return .failure(.retryable(status: nil, retryAfter: nil))
         }
-        if error != nil { return .failure(.retryable(status: nil)) }
+        if error != nil { return .failure(.retryable(status: nil, retryAfter: nil)) }
         guard let http = response as? HTTPURLResponse else { return .failure(.malformedResponse) }
         switch http.statusCode {
         case 200..<300: break
         case 401, 403: return .failure(.authentication)
-        case 408, 425, 429, 500...599: return .failure(.retryable(status: http.statusCode))
+        case 408, 425, 429, 500...599:
+            return .failure(.retryable(
+                status: http.statusCode,
+                retryAfter: retryAfter(from: http.value(forHTTPHeaderField: "Retry-After"))
+            ))
         default: return .failure(.permanent(status: http.statusCode))
         }
         guard let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
@@ -225,5 +229,18 @@ final class GroundworkClient {
     private static func clientError(for error: GroundworkModelError) -> GroundworkClientError {
         if case .unsupportedSchema(let version) = error { return .unsupportedSchema(version) }
         return .malformedResponse
+    }
+
+    private static func retryAfter(from value: String?) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if let seconds = TimeInterval(value), seconds >= 0 { return min(seconds, 86_400) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        guard let date = formatter.date(from: value) else { return nil }
+        return max(0, min(date.timeIntervalSinceNow, 86_400))
     }
 }

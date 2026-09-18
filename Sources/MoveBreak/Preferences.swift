@@ -200,15 +200,6 @@ enum Preferences {
         double(forKey: "tabCacheLifetime", default: defaultTabCacheLifetime, range: tabCacheLifetimeRange)
     }
 
-    // MARK: - Notion
-
-    /// Not a secret — the integration token lives in the Keychain instead. Set via
-    /// `--configure-notion`.
-    static var notionDatabaseID: String? {
-        get { defaults.string(forKey: "notionDatabaseID") }
-        set { defaults.set(newValue, forKey: "notionDatabaseID") }
-    }
-
     // MARK: - Groundwork
 
     static var groundworkBaseURL: URL? {

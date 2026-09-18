@@ -104,7 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
-        SessionLogger.shared.retryPendingSyncs()
+        SessionLogger.shared.recoverAndRetry()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(refreshGroundworkSyncStatus),
+            name: .groundworkOutboxChanged,
+            object: nil
+        )
 
         // The menu bar may be full, in which case the status item is never shown and this
         // is the only way to reach a running instance.
@@ -194,13 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         prompt.onDismiss = { [weak self] in
             self?.routineProvider.cancel()
         }
-        routineWindow.onFinish = { completion in
-            // Issue #7 switches delivery to the Groundwork outbox. Until then, preserve
-            // local JSONL + optional Notion behavior while exposing the full typed payload.
-            SessionLogger.shared.logCompletion(
-                routine: completion.routine,
-                checkedIDs: Set(completion.checkedItemIDs)
-            )
+        routineWindow.onFinish = { completion, saved in
+            SessionLogger.shared.logCompletion(completion: completion) { result in
+                saved(result.map { _ in () })
+            }
         }
     }
 
@@ -307,6 +310,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let syncStatus = NSMenuItem(
+            title: GroundworkOutbox.shared.status.summary,
+            action: nil,
+            keyEquivalent: ""
+        )
+        syncStatus.isEnabled = false
+        syncStatus.tag = MenuTag.syncStatus.rawValue
+        menu.addItem(syncStatus)
+
+        let retrySync = NSMenuItem(
+            title: "Retry Groundwork Sync",
+            action: #selector(retryGroundworkSync(_:)),
+            keyEquivalent: ""
+        )
+        retrySync.target = self
+        retrySync.tag = MenuTag.retrySync.rawValue
+        retrySync.isEnabled = GroundworkOutbox.shared.status.pending > 0
+        menu.addItem(retrySync)
+
+        menu.addItem(.separator())
+
         let pause = NSMenuItem(
             title: "Pause Detection",
             action: #selector(togglePause(_:)),
@@ -368,6 +392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case status = 1
         case pause = 2
         case routinesEnd = 3
+        case syncStatus = 4
+        case retrySync = 5
     }
 
     private func updateStatusTitle(_ state: SessionState) {
@@ -403,6 +429,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         routineBuilder.show(store: routineStore)
     }
 
+    @objc private func retryGroundworkSync(_ sender: NSMenuItem) {
+        GroundworkOutbox.shared.retryFailed()
+    }
+
+    @objc private func refreshGroundworkSyncStatus() {
+        guard let menu = statusItem?.menu else { return }
+        let status = GroundworkOutbox.shared.status
+        menu.item(withTag: MenuTag.syncStatus.rawValue)?.title = status.summary
+        menu.item(withTag: MenuTag.retrySync.rawValue)?.isEnabled = status.pending > 0
+    }
+
     @objc private func togglePause(_ sender: NSMenuItem) {
         setPaused(!isPaused)
     }
@@ -427,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pollTimer = nil
         pollScheduler.shutdown()
         routineProvider.cancel()
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func reportUnsupported() {

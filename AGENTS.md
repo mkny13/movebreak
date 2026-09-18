@@ -47,9 +47,9 @@ To run self-test directly:
 
 ## Integrations and accounts
 
-- Groundwork behavior is planned, not shipped (see
+- Groundwork routine generation and durable completion sync are shipped (see
   [movebreak#2](https://github.com/mkny13/movebreak/issues/2) and [ROADMAP.md](ROADMAP.md)).
-  Local static routines, editing, history, and optional Notion sync remain live until
-  their owning migration issues merge.
+  Local static routines, editing, and history remain live fallbacks; legacy Notion data is
+  preserved but no active Notion setup or request path remains.
 - This repo is dual-use (`accounts = ["personal", "work"]`). Git hosting operations must
   use the personal GitHub identity `mkny13`.

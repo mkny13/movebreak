@@ -124,11 +124,12 @@ the new location. To stop the LaunchAgent and remove its plist:
 2. Quit MoveBreak from its menu, or send `--quit` as shown below.
 3. Delete `MoveBreak.app` and the checkout if they are no longer needed.
 
-Those steps preserve preferences, saved routines, local history, and any Notion credential.
+Those steps preserve preferences, saved routines, local history, and integration credentials.
 To remove them too, use the reset commands in [Configuration](#configuration), delete
-`~/Library/Application Support/MoveBreak/`, and remove the Keychain item whose service is
-`com.mike.MoveBreak.notion` and account is `integrationToken`. These data-removal steps are
-permanent, so inspect or back up local history first.
+`~/Library/Application Support/MoveBreak/`, and remove the origin-bound Keychain item whose
+service is `com.mike.MoveBreak.groundwork`. Retired Notion credentials, if present from an old
+version, remain under `com.mike.MoveBreak.notion` until the user removes them. These data-removal
+steps are permanent, so inspect or back up local history first.
 
 ## Detection behavior
 
@@ -234,8 +235,7 @@ Run `./build/MoveBreak --help` for the executable's authoritative help. The ship
 | `--demo` | Launch and show the routine-choice prompt. |
 | `--demo-pt` | Launch and show the PT checklist. |
 | `--demo-builder` | Launch and show the routine editor. |
-| `--configure-notion` | Interactively configure optional Notion sync and exit. |
-| `--configure-groundwork` | Interactively store Groundwork URL, location, duration, and an origin-bound Keychain token, then exit. |
+| `--configure-groundwork` | Interactively configure Groundwork routines and completion sync, then exit. |
 | `--show` | Ask an already-running instance to show the prompt, then exit. |
 | `--toggle-pause` | Ask an already-running instance to pause/resume, then exit. |
 | `--quit` | Ask an already-running instance to quit, then exit. |
@@ -243,7 +243,7 @@ Run `./build/MoveBreak --help` for the executable's authoritative help. The ship
 | `--check-update-now` | Check once for an update and exit; installation requires stable signing. |
 
 Secrets are rejected in command-line arguments. In particular, do not invent token flags;
-use the appropriate interactive `--configure-notion` or `--configure-groundwork` flow.
+use the interactive `--configure-groundwork` flow.
 
 The repository scripts are:
 
@@ -279,7 +279,7 @@ defaults delete com.mike.movebreak
 ```
 
 The app also owns `savedRoutines` (JSON-encoded routine definitions),
-`notionDatabaseID`, `groundworkBaseURL`, `groundworkLocationID`, and
+`groundworkBaseURL`, `groundworkLocationID`, and
 `groundworkDurationMinutes` in this domain. Treat
 `savedRoutines` as app-managed data rather than editing its encoded value with `defaults`.
 
@@ -335,9 +335,11 @@ Finishing a checklist appends one JSON object per line to:
 ```
 
 The app creates/tightens the `MoveBreak` directory to owner-only mode `0700` and contained
-files to `0600`. Failed Notion deliveries are stored atomically in `pending-sync.json` and
-retried at app launch. The local JSONL append happens before any network attempt and remains
-the source of truth.
+files to `0600`. New records include the complete structured Groundwork snapshot, stable client
+UUID, and configured destination. The local JSONL record and the separate atomic
+`groundwork-outbox-v1.json` entry are both durable before **Done** closes; a disk error remains
+visible in the checklist for retry. Launch reconciliation repairs a crash between those writes.
+Legacy JSONL records remain readable but are never uploaded automatically.
 
 Saved routine definitions and other non-secret preferences live in `UserDefaults`, not in
 the Application Support directory. MoveBreak does not store audio or a general browser
@@ -375,30 +377,22 @@ rationale, and source. Checking an item explicitly confirms the displayed dose. 
 deviated, enter only the measured set/rep/hold/side values; untouched measurements are not
 invented. A warning affecting checked work requires a typed reason before **Done** is enabled.
 
-## Optional Notion sync
+## Groundwork completion sync
 
-Groundwork completion delivery is not shipped yet. The generated HUD creates a structured
-completion for the future outbox, while the active persistence path remains local history plus
-optional Notion sync.
+Every finished generated, cached, or local routine is placed in the durable Groundwork outbox
+after local history succeeds. Delivery is asynchronous and reuses the same client UUID across
+retries, so a lost response can be retried without creating another History session. Network,
+429, and server failures back off with jitter; `Retry-After` is honored. Authentication errors
+pause for reconfiguration, while rejected 400/409 records remain available for inspection.
 
-Create a Notion internal integration and a database shared with that integration. The
-database must have these properties with matching names and types: `Entry` (title), `Date`
-(date), `Routine` (select), `Exercises Completed` (rich text), `Completed` (number), `Total`
-(number), and `Est. Duration (min)` (number). Then run:
+The menu shows pending and failed counts and offers **Retry Groundwork Sync**. Using that control
+after first-time configuration explicitly binds previously unconfigured work to the current
+origin. Work already bound to a different origin is never silently reassigned; reconfigure the
+matching origin and retry instead. No completion request runs on the CoreAudio polling path.
 
-```bash
-./MoveBreak.app/Contents/MacOS/MoveBreak --configure-notion
-```
-
-The interactive prompt disables terminal echo for the token. The token is stored only in
-the device-local Keychain service `com.mike.MoveBreak.notion`, account `integrationToken`,
-with `AfterFirstUnlockThisDeviceOnly` accessibility. It is never accepted as an argument,
-written to `UserDefaults`, or included in app diagnostics. The non-secret database ID is
-stored in `UserDefaults` as `notionDatabaseID`.
-
-On completion, Notion receives the date, routine title, checked exercise names, checked and
-total counts, and estimated duration. A network or configuration failure does not undo local
-history; it adds the record to the local pending queue.
+Active Notion requests and setup were removed. Existing `pending-sync.json`, old JSONL data,
+the `notionDatabaseID` preference, and old Keychain items are deliberately left untouched and
+are neither imported nor deleted.
 
 ## Stable signing and updates
 
@@ -472,15 +466,20 @@ These observations explain current choices; they are not universal setup promise
 - Full-screen auxiliary panel behavior can depend on the conferencing app and macOS version;
   use `--demo` and a real call to validate it on the target Mac.
 
-## Planned Groundwork completion integration
+## Manual completion verification
 
-MoveBreak now fetches and displays generated routines while preserving the bundled catalog,
-local routine editor and local-only shuffle. Durable Groundwork completion delivery and Notion
-retirement remain planned; local JSONL history and optional Notion sync remain active.
+After configuring a non-production Groundwork account:
 
-[ROADMAP.md](ROADMAP.md) is the authoritative shipped/planned boundary. The planned migration
-is tracked by [issue #2](https://github.com/mkny13/movebreak/issues/2) and its dependent
-issues; future behavior described there should not be read as current setup guidance.
+1. Use `--demo` or join a real full-screen call, complete one offered routine, and confirm the
+   floating checklist remains above the call without stealing focus.
+2. Confirm exactly one matching session and its checked dose appear in Groundwork History and
+   analytics without a browser opening.
+3. Disconnect networking, finish another routine, relaunch MoveBreak, and confirm the menu shows
+   pending work. Restore networking, choose **Retry Groundwork Sync**, and verify one History
+   session appears with the original completion time and no duplicate.
+4. If testing a destination change, confirm older pending work is not uploaded to the new origin.
+
+[ROADMAP.md](ROADMAP.md) is the authoritative shipped/planned boundary for the broader migration.
 
 ## Agent workflows
 
