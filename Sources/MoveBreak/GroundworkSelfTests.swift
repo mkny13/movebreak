@@ -434,6 +434,7 @@ enum GroundworkSelfTests {
             return reporter.failureCount
         }
         defaults.removePersistentDomain(forName: suiteName)
+        let fixture = SelfTestTemporaryDirectory(prefix: "movebreak-provider")
         Preferences.withDefaults(defaults) {
             Preferences.groundworkLocationID = "office"
             Preferences.groundworkDurationMinutes = 5
@@ -444,9 +445,10 @@ enum GroundworkSelfTests {
             secondTransport.autoRespond = false
             secondTransport.responseData = Data(responseJSON.replacingOccurrences(of: "Desk reset", with: "New desk reset").utf8)
             do {
+                try fixture.create()
                 var clients = [try client(transport: firstTransport), try client(transport: secondTransport)]
                 let provider = GroundworkRoutineProvider(
-                    cache: GroundworkRoutineCache(directoryURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)),
+                    cache: GroundworkRoutineCache(directoryURL: fixture.url.appendingPathComponent("cache")),
                     clientFactory: { clients.removeFirst() }
                 )
                 var deliveredTitles: [String] = []
@@ -465,6 +467,7 @@ enum GroundworkSelfTests {
                 thirdTransport.autoRespond = false
                 thirdTransport.responseData = Data(responseJSON.utf8)
                 let dismissed = GroundworkRoutineProvider(
+                    cache: GroundworkRoutineCache(directoryURL: fixture.url.appendingPathComponent("dismissed-cache")),
                     clientFactory: { try client(transport: thirdTransport) }
                 )
                 var deliveredAfterDismissal = false
@@ -475,8 +478,57 @@ enum GroundworkSelfTests {
                     "dismissal cancels and suppresses an in-flight result",
                     thirdTransport.cancellation.cancelled && !deliveredAfterDismissal
                 )
+
+                let localRoutine = Routine(
+                    key: "local-test", title: "Local Test", subtitle: "fixture",
+                    estimatedMinutes: 2, exercises: [ExerciseCatalog.all[0]]
+                )
+                var unconfiguredMappedToLocal = false
+                let unconfigured = GroundworkRoutineProvider(
+                    cache: GroundworkRoutineCache(directoryURL: fixture.url.appendingPathComponent("unconfigured-cache")),
+                    clientFactory: { nil }
+                )
+                _ = unconfigured.requestOffer(localRoutines: [localRoutine]) { _, state in
+                    if case .local(let routines, let label) = state {
+                        unconfiguredMappedToLocal = routines.map(\.key) == ["local-test"]
+                            && label.contains("not clinically revalidated")
+                    }
+                }
+                reporter.check("unconfigured offer maps to labeled local fallback", unconfiguredMappedToLocal)
+
+                let emptyTransport = Transport()
+                emptyTransport.responseData = Data("""
+                    {"schemaVersion":1,"generatedAt":"2026-09-17T14:30:00.000Z","routine":null}
+                    """.utf8)
+                var mappedToEmpty = false
+                let emptyProvider = GroundworkRoutineProvider(
+                    cache: GroundworkRoutineCache(directoryURL: fixture.url.appendingPathComponent("empty-cache")),
+                    clientFactory: { try client(transport: emptyTransport) }
+                )
+                _ = emptyProvider.requestOffer(localRoutines: [localRoutine]) { _, state in
+                    if case .empty = state { mappedToEmpty = true }
+                }
+                reporter.check("valid empty response remains an empty HUD state", mappedToEmpty)
+
+                let offlineTransport = Transport()
+                offlineTransport.error = URLError(.notConnectedToInternet)
+                var mappedToOfflineFallback = false
+                let offlineProvider = GroundworkRoutineProvider(
+                    cache: GroundworkRoutineCache(directoryURL: fixture.url.appendingPathComponent("offline-cache")),
+                    clientFactory: { try client(transport: offlineTransport) }
+                )
+                _ = offlineProvider.requestOffer(localRoutines: [localRoutine]) { _, state in
+                    if case .local(let fallback, let label) = state {
+                        mappedToOfflineFallback = fallback.map(\.key) == ["local-test"]
+                            && label.contains("unavailable")
+                            && label.contains("not clinically revalidated")
+                    }
+                }
+                reporter.check("offline miss maps to labeled local fallback", mappedToOfflineFallback)
+                try fixture.cleanup()
             } catch {
                 reporter.check("provider cancellation fixtures", false, detail: "\(error)")
+                try? fixture.cleanup()
             }
         }
         defaults.removePersistentDomain(forName: suiteName)
