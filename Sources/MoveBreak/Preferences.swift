@@ -209,6 +209,30 @@ enum Preferences {
         set { defaults.set(newValue, forKey: "notionDatabaseID") }
     }
 
+    // MARK: - Groundwork
+
+    static var groundworkBaseURL: URL? {
+        get {
+            guard let raw = defaults.string(forKey: "groundworkBaseURL") else { return nil }
+            return URL(string: raw).flatMap(GroundworkSetup.validateBaseURL)
+        }
+        set { defaults.set(newValue?.absoluteString, forKey: "groundworkBaseURL") }
+    }
+
+    static var groundworkLocationID: String? {
+        get { defaults.string(forKey: "groundworkLocationID") }
+        set { defaults.set(newValue, forKey: "groundworkLocationID") }
+    }
+
+    static var groundworkDurationMinutes: Int {
+        get { int(forKey: "groundworkDurationMinutes", default: 5, range: 1...30) }
+        set {
+            if (1...30).contains(newValue) {
+                defaults.set(newValue, forKey: "groundworkDurationMinutes")
+            }
+        }
+    }
+
     // MARK: - Test Support
 
     /// Executes a closure using a temporary isolated UserDefaults domain, restoring the previous

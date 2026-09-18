@@ -10,6 +10,7 @@ enum SelfTest {
         SelfTestSuite(id: .security, run: SecuritySelfTests.run),
         SelfTestSuite(id: .persistence, run: PersistenceSelfTests.run),
         SelfTestSuite(id: .update, run: UpdateSelfTests.run),
+        SelfTestSuite(id: .groundwork, run: GroundworkSelfTests.run),
     ]
 
     static func run() -> Never {
