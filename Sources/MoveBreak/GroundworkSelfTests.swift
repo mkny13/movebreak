@@ -13,6 +13,9 @@ enum GroundworkSelfTests {
         var responseData: Data?
         var status = 200
         var error: Error?
+        var autoRespond = true
+        private var pendingCompletion: ((Data?, URLResponse?, Error?) -> Void)?
+        private var pendingResponse: URLResponse?
 
         func send(
             _ request: URLRequest,
@@ -24,8 +27,19 @@ enum GroundworkSelfTests {
                 url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
                 headerFields: ["Content-Type": "application/json; charset=utf-8"]
             )
-            completion(responseData, response, error)
+            if autoRespond {
+                completion(responseData, response, error)
+            } else {
+                pendingCompletion = completion
+                pendingResponse = response
+            }
             return cancellation
+        }
+
+        func respond() {
+            let completion = pendingCompletion
+            pendingCompletion = nil
+            completion?(responseData, pendingResponse, error)
         }
     }
 
@@ -323,6 +337,140 @@ enum GroundworkSelfTests {
         return reporter.failureCount
     }
 
+    private static func runHUDDomainCases() -> Int {
+        let reporter = SelfTestReporter()
+        do {
+            let generated = try response().routine!
+            let routine = Routine(
+                generated: generated,
+                provenance: .live,
+                sourceLabel: "Generated now by Groundwork"
+            )
+            reporter.check(
+                "generated display preserves authored order and canonical item IDs",
+                routine.exercises.map(\.id) == generated.items.map(\.id)
+                    && routine.shuffledForSession().exercises.map(\.id) == generated.items.map(\.id)
+            )
+            reporter.check(
+                "generated display preserves clinical context and safety",
+                routine.exercises.first?.generated?.exerciseID == "exercise-calf"
+                    && routine.exercises.first?.generated?.inclusionReasons == ["desk break", "current day load"]
+                    && routine.exercises.first?.generated?.warnings.first?.ruleID == "rule-achilles"
+                    && routine.exercises.first?.treadmill == .pauseTreadmill
+            )
+
+            let sessionID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+            let started = Date(timeIntervalSince1970: 1_700_000_000)
+            let tracker = RoutineSessionTracker(routine: routine, clientSessionID: sessionID, startedAt: started)
+            let missingReason = tracker.finish(
+                checkedIDs: ["item-1"], actualDoses: [:], warningReasons: [:],
+                finishedAt: started.addingTimeInterval(30)
+            )
+            reporter.check("warning dismissal requires an explicit retained reason", missingReason == nil)
+
+            let actual = GroundworkActualDose(sets: 1, reps: 6, holdSeconds: nil, side: nil)
+            let completion = tracker.finish(
+                checkedIDs: ["item-1"],
+                actualDoses: ["item-1": actual],
+                warningReasons: ["rule-achilles": "Reduced after discomfort"],
+                finishedAt: started.addingTimeInterval(45)
+            )
+            reporter.check(
+                "completion preserves run identity, canonical IDs, actual dose and warning reason",
+                completion?.clientSessionID == sessionID
+                    && completion?.checkedItemIDs == ["item-1"]
+                    && completion?.completedItems.first?.actualDose == actual
+                    && completion?.warningOverrides.first?.reason == "Reduced after discomfort"
+            )
+            reporter.check(
+                "actual deviation does not copy unobserved prescribed values",
+                completion?.completedItems.first?.actualDose.sets == 1
+                    && completion?.completedItems.first?.actualDose.reps == 6
+                    && completion?.completedItems.first?.actualDose.holdSeconds == nil
+                    && completion?.completedItems.first?.actualDose.side == nil
+            )
+            reporter.check(
+                "Done emits at most once",
+                tracker.finish(
+                    checkedIDs: ["item-1"], actualDoses: [:],
+                    warningReasons: ["rule-achilles": "again"]
+                ) == nil
+            )
+
+            let confirmedTracker = RoutineSessionTracker(routine: routine, startedAt: started)
+            let confirmed = confirmedTracker.finish(
+                checkedIDs: ["item-1"],
+                actualDoses: [:],
+                warningReasons: ["rule-achilles": "Completed within the warning guidance"]
+            )
+            reporter.check(
+                "explicit displayed-dose confirmation uses planned values",
+                confirmed?.completedItems.first?.actualDose
+                    == GroundworkActualDose(sets: 2, reps: 8, holdSeconds: nil, side: "bilateral")
+            )
+        } catch {
+            reporter.check("generated HUD domain fixture", false, detail: "\(error)")
+        }
+        return reporter.failureCount
+    }
+
+    private static func runProviderCancellationCases() -> Int {
+        let reporter = SelfTestReporter()
+        let suiteName = "com.mike.movebreak.tests.provider.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            reporter.check("provider defaults fixture", false)
+            return reporter.failureCount
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        Preferences.withDefaults(defaults) {
+            Preferences.groundworkLocationID = "office"
+            Preferences.groundworkDurationMinutes = 5
+            let firstTransport = Transport()
+            firstTransport.autoRespond = false
+            firstTransport.responseData = Data(responseJSON.utf8)
+            let secondTransport = Transport()
+            secondTransport.autoRespond = false
+            secondTransport.responseData = Data(responseJSON.replacingOccurrences(of: "Desk reset", with: "New desk reset").utf8)
+            do {
+                var clients = [try client(transport: firstTransport), try client(transport: secondTransport)]
+                let provider = GroundworkRoutineProvider(
+                    cache: GroundworkRoutineCache(directoryURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)),
+                    clientFactory: { clients.removeFirst() }
+                )
+                var deliveredTitles: [String] = []
+                _ = provider.requestOffer(localRoutines: []) { _, state in
+                    if case .generated(let routine) = state { deliveredTitles.append(routine.title) }
+                }
+                _ = provider.requestOffer(localRoutines: []) { _, state in
+                    if case .generated(let routine) = state { deliveredTitles.append(routine.title) }
+                }
+                reporter.check("superseding a fetch cancels its transport", firstTransport.cancellation.cancelled)
+                firstTransport.respond()
+                secondTransport.respond()
+                reporter.check("stale fetch result is ignored", deliveredTitles == ["New desk reset"])
+
+                let thirdTransport = Transport()
+                thirdTransport.autoRespond = false
+                thirdTransport.responseData = Data(responseJSON.utf8)
+                let dismissed = GroundworkRoutineProvider(
+                    clientFactory: { try client(transport: thirdTransport) }
+                )
+                var deliveredAfterDismissal = false
+                _ = dismissed.requestOffer(localRoutines: []) { _, _ in deliveredAfterDismissal = true }
+                dismissed.cancel()
+                thirdTransport.respond()
+                reporter.check(
+                    "dismissal cancels and suppresses an in-flight result",
+                    thirdTransport.cancellation.cancelled && !deliveredAfterDismissal
+                )
+            } catch {
+                reporter.check("provider cancellation fixtures", false, detail: "\(error)")
+            }
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        return reporter.failureCount
+    }
+
     private static func runSetupCases() -> Int {
         let reporter = SelfTestReporter()
         reporter.check("production HTTP base URL is rejected", GroundworkSetup.validateBaseURL(URL(string: "http://groundwork.example")!) == nil)
@@ -393,6 +541,10 @@ enum GroundworkSelfTests {
         print("")
         print("Groundwork durable cache & fallback provenance")
         failures += runCacheCases()
+        print("")
+        print("Generated routine display, completion honesty & stale fetch cancellation")
+        failures += runHUDDomainCases()
+        failures += runProviderCancellationCases()
         print("")
         print("Groundwork setup, URL policy & Keychain origin isolation")
         failures += runSetupCases()

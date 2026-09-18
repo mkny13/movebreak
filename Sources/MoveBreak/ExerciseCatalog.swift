@@ -39,6 +39,7 @@ struct Exercise: Identifiable, Codable {
     let treadmill: TreadmillTag
     let posture: Posture
     let area: String            // grouping label, e.g. "Sciatic"
+    let generated: GeneratedExerciseContext?
 
     init(
         _ name: String,
@@ -55,6 +56,24 @@ struct Exercise: Identifiable, Codable {
         self.treadmill = treadmill
         self.posture = posture
         self.area = area
+        self.generated = nil
+    }
+
+    init(item: GroundworkRoutineItem) {
+        self.id = item.id
+        self.name = item.name
+        self.dose = item.plannedDose.displayText
+        self.cue = item.cues.joined(separator: " • ")
+        self.treadmill = item.treadmillSafety == .walkSafe ? .walkSafe : .pauseTreadmill
+        self.posture = .standing
+        self.area = "Generated routine"
+        self.generated = GeneratedExerciseContext(
+            exerciseID: item.exerciseID,
+            prescriptionID: item.prescriptionID,
+            plannedDose: item.plannedDose,
+            inclusionReasons: item.inclusionReasons,
+            warnings: item.warnings
+        )
     }
 
     static func slug(_ name: String) -> String {
@@ -66,6 +85,14 @@ struct Exercise: Identifiable, Codable {
         while result.contains("--") { result = result.replacingOccurrences(of: "--", with: "-") }
         return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
+}
+
+struct GeneratedExerciseContext: Codable, Equatable {
+    let exerciseID: String
+    let prescriptionID: String
+    let plannedDose: GroundworkDose
+    let inclusionReasons: [String]
+    let warnings: [GroundworkWarning]
 }
 
 /// The full library of exercises a custom routine can be built from. Grouped here by area

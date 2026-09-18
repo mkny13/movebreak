@@ -33,6 +33,15 @@ struct GroundworkDose: Codable, Equatable {
             throw GroundworkModelError.invalid("dose must contain a measurable value")
         }
     }
+
+    var displayText: String {
+        var components: [String] = []
+        if let sets { components.append("\(sets) set\(sets == 1 ? "" : "s")") }
+        if let reps { components.append("\(reps) rep\(reps == 1 ? "" : "s")") }
+        if let holdSeconds { components.append("\(holdSeconds) sec hold") }
+        if let side, !side.isEmpty { components.append(side.replacingOccurrences(of: "_", with: " ")) }
+        return components.joined(separator: " · ")
+    }
 }
 
 struct GroundworkWarning: Codable, Equatable {
