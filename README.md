@@ -79,14 +79,16 @@ full browser URLs written to the terminal.
 ## Everyday operation
 
 MoveBreak waits for two consecutive matching polls before changing state (normally about
-four seconds with the defaults). It prompts once per continuous meeting/video session. From
-the prompt, choose a routine or select **Not now**. A chosen routine opens a checklist; only
-exercises you explicitly check are recorded when you finish it.
+four seconds with the defaults). It prompts once per continuous meeting/video session and,
+when configured, requests one Groundwork routine at that moment. From the prompt, choose the
+generated or clearly labeled fallback routine, or select **Not now**. A chosen routine opens
+a checklist; only exercises you explicitly check are recorded when you finish it.
 
 The menu provides:
 
 - the current detection state;
-- each nonempty saved routine, for starting one manually;
+- **Start Groundwork Break…**, using the same generated-offer path as detection;
+- each nonempty saved routine prefixed **Local:**, for an explicit local start;
 - **Edit Routines…** for adding, renaming, deleting, or changing local routines;
 - **Pause Detection** / **Resume Detection**; and
 - **Quit MoveBreak**.
@@ -186,8 +188,9 @@ A useful live sequence is:
 ./MoveBreak.app/Contents/MacOS/MoveBreak --demo-builder
 ```
 
-These launch the app and show the prompt, the seeded PT checklist (or first available
-routine), or the routine editor. Demo launches do not start detection or automatic updates.
+These launch the app and show a deterministic offline generated-routine prompt, its clinical
+checklist, or the routine editor. Demo launches do not use the network, start detection, or
+start automatic updates.
 
 ### Missing menu-bar icon
 
@@ -342,10 +345,10 @@ history. Diagnostic commands print hosts unless `--verbose` is explicitly suppli
 
 ## Groundwork transport setup
 
-Groundwork transport, strict version-1 wire models, and an offline routine cache are shipped
-as infrastructure for the later generated-routine HUD. The current prompt and checklist still
-use local saved routines and do not poll Groundwork. Configuration therefore has no visible UI
-effect yet and unconfigured startup performs no Groundwork request.
+Groundwork transport, strict version-1 wire models, an offline routine cache, and the
+generated-routine HUD are shipped. Configuration affects detected prompts, **Start Groundwork
+Break…**, and remote `--show`; unconfigured startup still performs no Groundwork request.
+Fetching occurs only on one of those explicit offer invocations, never in audio polling.
 
 When a compatible Groundwork deployment is available, configure it interactively:
 
@@ -361,15 +364,22 @@ account derived from the exact URL origin, so a token configured for one scheme/
 not available to another. Non-secret settings remain in `UserDefaults`.
 
 Only successfully validated, nonempty live routines are cached. Cache entries are isolated by
-origin, location, duration, and schema version. A future offline HUD can label a cached copy
-with its timestamp and “not revalidated” status, or use clearly labeled bundled/local defaults
-when no cache exists. A valid empty live response remains empty. Authentication, unavailable,
-malformed, corrupt-cache, and unconfigured states are kept separate.
+origin, location, duration, and schema version. Offline offers label cached copies with their
+timestamp and “not revalidated” status, or offer clearly labeled saved-local defaults when no
+cache exists. A valid empty live response remains empty. Authentication, unavailable,
+malformed, corrupt-cache, and unconfigured states are shown distinctly.
+
+Generated checklists preserve Groundwork's authored order and canonical item IDs. They show
+planned dose, cues, inclusion reasons, treadmill safety, and every warning's message,
+rationale, and source. Checking an item explicitly confirms the displayed dose. If actual work
+deviated, enter only the measured set/rep/hold/side values; untouched measurements are not
+invented. A warning affecting checked work requires a typed reason before **Done** is enabled.
 
 ## Optional Notion sync
 
-Groundwork completion delivery and generated-routine UI are not shipped. The only current
-remote completion integration is optional Notion sync; local history works without it.
+Groundwork completion delivery is not shipped yet. The generated HUD creates a structured
+completion for the future outbox, while the active persistence path remains local history plus
+optional Notion sync.
 
 Create a Notion internal integration and a database shared with that integration. The
 database must have these properties with matching names and types: `Entry` (title), `Date`
@@ -462,12 +472,11 @@ These observations explain current choices; they are not universal setup promise
 - Full-screen auxiliary panel behavior can depend on the conferencing app and macOS version;
   use `--demo` and a real call to validate it on the target Mac.
 
-## Planned Groundwork UI and completion integration
+## Planned Groundwork completion integration
 
-MoveBreak now has configurable Groundwork credentials, native request/response models, and a
-durable offline routine cache, but the app does not yet fetch for its prompt, display generated
-routines, or deliver completions. The bundled catalog, local routine editor and shuffle, local
-JSONL history, and optional Notion sync remain active.
+MoveBreak now fetches and displays generated routines while preserving the bundled catalog,
+local routine editor and local-only shuffle. Durable Groundwork completion delivery and Notion
+retirement remain planned; local JSONL history and optional Notion sync remain active.
 
 [ROADMAP.md](ROADMAP.md) is the authoritative shipped/planned boundary. The planned migration
 is tracked by [issue #2](https://github.com/mkny13/movebreak/issues/2) and its dependent

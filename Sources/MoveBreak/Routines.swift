@@ -3,12 +3,52 @@ import Foundation
 /// A routine is just a named slice of the exercise catalog — the actual catalog picks
 /// live in `RoutineStore`; this struct is the ready-to-display result of resolving one.
 struct Routine: Identifiable {
-    let id = UUID()
+    let id: UUID
     let key: String              // matches the owning SavedRoutine.id
     let title: String
     let subtitle: String
     let estimatedMinutes: Int
     let exercises: [Exercise]
+    let provenance: GroundworkProvenance
+    let sourceLabel: String?
+    let generatedRoutine: GroundworkRoutine?
+
+    init(
+        id: UUID = UUID(),
+        key: String,
+        title: String,
+        subtitle: String,
+        estimatedMinutes: Int,
+        exercises: [Exercise],
+        provenance: GroundworkProvenance = .local,
+        sourceLabel: String? = nil,
+        generatedRoutine: GroundworkRoutine? = nil
+    ) {
+        self.id = id
+        self.key = key
+        self.title = title
+        self.subtitle = subtitle
+        self.estimatedMinutes = estimatedMinutes
+        self.exercises = exercises
+        self.provenance = provenance
+        self.sourceLabel = sourceLabel
+        self.generatedRoutine = generatedRoutine
+    }
+
+    init(generated: GroundworkRoutine, provenance: GroundworkProvenance, sourceLabel: String) {
+        self.init(
+            key: generated.id,
+            title: generated.title,
+            subtitle: "Groundwork · \(generated.posture)",
+            estimatedMinutes: generated.durationMinutes,
+            exercises: generated.items.map(Exercise.init(item:)),
+            provenance: provenance,
+            sourceLabel: sourceLabel,
+            generatedRoutine: generated
+        )
+    }
+
+    var isGenerated: Bool { generatedRoutine != nil }
 
     /// Semi-randomized order for a session: walk-safe exercises are shuffled among
     /// themselves and shown first, pause-treadmill exercises are shuffled among
@@ -17,11 +57,37 @@ struct Routine: Identifiable {
     /// while still varying the order (and, via `RoutineWindow`'s area grouping, which
     /// area shows up first) from one session to the next.
     func shuffledForSession() -> Routine {
+        guard !isGenerated else { return self }
         let walkSafe = exercises.filter { $0.treadmill == .walkSafe }.shuffled()
         let pause = exercises.filter { $0.treadmill == .pauseTreadmill }.shuffled()
         return Routine(
             key: key, title: title, subtitle: subtitle,
-            estimatedMinutes: estimatedMinutes, exercises: walkSafe + pause
+            estimatedMinutes: estimatedMinutes, exercises: walkSafe + pause,
+            provenance: provenance, sourceLabel: sourceLabel
+        )
+    }
+
+
+    var completionSnapshot: GroundworkRoutineSnapshot {
+        if let generatedRoutine { return GroundworkRoutineSnapshot(routine: generatedRoutine) }
+        return GroundworkRoutineSnapshot(
+            routineID: nil,
+            title: title,
+            durationMinutes: estimatedMinutes,
+            locationID: nil,
+            posture: nil,
+            items: exercises.map {
+                GroundworkRoutineSnapshotItem(
+                    itemID: $0.id,
+                    exerciseID: nil,
+                    prescriptionID: nil,
+                    name: $0.name,
+                    cues: [$0.cue],
+                    plannedDose: nil,
+                    warnings: []
+                )
+            },
+            warnings: []
         )
     }
 }
@@ -30,4 +96,51 @@ enum Routines {
     static let disclaimer =
         "General movement prompts, not medical advice — stop anything that increases pain, "
         + "and defer to your PT."
+
+    /// Network-free fixture used by both demo entry points so visual UAT is deterministic.
+    static let demoGenerated: Routine = {
+        let warning = GroundworkWarning(
+            ruleID: "demo-neck",
+            message: "Stay within a comfortable range",
+            rationale: "This demo warning shows the clinical acknowledgement flow.",
+            source: "offline demo fixture"
+        )
+        let generated = GroundworkRoutine(
+            id: "demo-generated-routine",
+            title: "Offline Groundwork Demo",
+            durationMinutes: 5,
+            locationID: "demo-office",
+            posture: "standing",
+            items: [
+                GroundworkRoutineItem(
+                    id: "demo-shoulder-reset",
+                    exerciseID: "shoulder-reset",
+                    prescriptionID: "demo-rx-1",
+                    name: "Shoulder reset",
+                    cues: ["Let the shoulders drop", "Move slowly"],
+                    plannedDose: GroundworkDose(sets: 1, reps: 8, holdSeconds: nil, side: "bilateral"),
+                    inclusionReasons: ["desk posture", "short meeting break"],
+                    treadmillSafety: .walkSafe,
+                    warnings: []
+                ),
+                GroundworkRoutineItem(
+                    id: "demo-neck-turn",
+                    exerciseID: "neck-turn",
+                    prescriptionID: "demo-rx-2",
+                    name: "Supported neck turn",
+                    cues: ["Pause the belt", "Turn only as far as comfortable"],
+                    plannedDose: GroundworkDose(sets: nil, reps: 4, holdSeconds: 3, side: "each_side"),
+                    inclusionReasons: ["active clinical gate", "neck mobility"],
+                    treadmillSafety: .pauseBelt,
+                    warnings: [warning]
+                ),
+            ],
+            warnings: []
+        )
+        return Routine(
+            generated: generated,
+            provenance: .cached,
+            sourceLabel: "Deterministic offline demo — not clinically revalidated"
+        )
+    }()
 }

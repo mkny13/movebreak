@@ -7,6 +7,17 @@ enum GroundworkSchema {
 enum GroundworkTreadmillSafety: String, Codable {
     case walkSafe = "walk_safe"
     case pauseBelt = "pause_belt"
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = GroundworkTreadmillSafety(rawValue: value) ?? .unknown
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 struct GroundworkDose: Codable, Equatable {
@@ -32,6 +43,15 @@ struct GroundworkDose: Codable, Equatable {
         if sets == nil && reps == nil && holdSeconds == nil {
             throw GroundworkModelError.invalid("dose must contain a measurable value")
         }
+    }
+
+    var displayText: String {
+        var components: [String] = []
+        if let sets { components.append("\(sets) set\(sets == 1 ? "" : "s")") }
+        if let reps { components.append("\(reps) rep\(reps == 1 ? "" : "s")") }
+        if let holdSeconds { components.append("\(holdSeconds) sec hold") }
+        if let side, !side.isEmpty { components.append(side.replacingOccurrences(of: "_", with: " ")) }
+        return components.joined(separator: " · ")
     }
 }
 
