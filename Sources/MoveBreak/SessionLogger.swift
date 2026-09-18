@@ -1,6 +1,5 @@
 import Foundation
 
-/// Typed errors produced during SessionLogger operations.
 enum SessionLoggerError: Error, LocalizedError, CustomStringConvertible, Equatable {
     case encodingFailed(String)
     case decodingFailed(String)
@@ -10,59 +9,59 @@ enum SessionLoggerError: Error, LocalizedError, CustomStringConvertible, Equatab
 
     var description: String {
         switch self {
-        case .encodingFailed(let msg): return "Failed to encode session record: \(msg)"
-        case .decodingFailed(let msg): return "Failed to decode session record: \(msg)"
-        case .readFailed(let msg): return "Failed to read session data: \(msg)"
-        case .writeFailed(let msg): return "Failed to write session data: \(msg)"
-        case .directoryCreationFailed(let msg): return "Failed to create application support directory: \(msg)"
+        case .encodingFailed(let message): return "Failed to encode session record: \(message)"
+        case .decodingFailed(let message): return "Failed to decode session record: \(message)"
+        case .readFailed(let message): return "Failed to read session data: \(message)"
+        case .writeFailed(let message): return "Failed to write session data: \(message)"
+        case .directoryCreationFailed(let message): return "Failed to create application support directory: \(message)"
         }
     }
 
     var errorDescription: String? { description }
 }
 
-/// Local session history plus a best-effort push to Notion. The JSONL file is the source of
-/// truth — it's written before any network call, so a completed session is never lost even if
-/// Notion is unreachable or unconfigured.
+/// Append-only local history. A structured completion is acknowledged only after both its
+/// JSONL record and origin-bound outbox entry are durable. On launch, history repairs a crash
+/// between those two writes; legacy records remain readable and are never uploaded.
 final class SessionLogger {
-    static let shared = SessionLogger()
+    static let shared = SessionLogger(outbox: .shared)
 
     static let directoryPermissions: NSNumber = 0o700
     static let filePermissions: NSNumber = 0o600
 
     private let queue: DispatchQueue
-    private let deliver: (SessionRecord, @escaping (Result<Void, Error>) -> Void) -> Void
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let fileManager: FileManager
+    private let outbox: GroundworkOutbox
+    private let currentOrigin: () -> GroundworkOrigin?
+    private var knownHistoryIDs: Set<UUID>?
 
     let supportDir: URL
     let logFile: URL
-    let pendingFile: URL
-    private let fileManager: FileManager
 
     init(
         supportDir: URL? = nil,
         fileManager: FileManager = .default,
         queue: DispatchQueue = DispatchQueue(label: "com.mike.MoveBreak.sessionLogger"),
-        deliver: @escaping (SessionRecord, @escaping (Result<Void, Error>) -> Void) -> Void = NotionClient.createSessionPage
+        outbox: GroundworkOutbox? = nil,
+        currentOrigin: @escaping () -> GroundworkOrigin? = {
+            Preferences.groundworkBaseURL.flatMap(GroundworkOrigin.init)
+        }
     ) {
         self.fileManager = fileManager
         self.queue = queue
-        self.deliver = deliver
-        let dir: URL
-        if let supportDir = supportDir {
-            dir = supportDir
-        } else {
-            let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            dir = base.appendingPathComponent("MoveBreak", isDirectory: true)
-        }
-        self.supportDir = dir
-        self.logFile = dir.appendingPathComponent("sessions.jsonl")
-        self.pendingFile = dir.appendingPathComponent("pending-sync.json")
-        self.ensureSupportDirectoryAndPermissions()
+        self.currentOrigin = currentOrigin
+        let directory = supportDir ?? fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("MoveBreak", isDirectory: true)
+        self.supportDir = directory
+        self.logFile = directory.appendingPathComponent("sessions.jsonl")
+        self.outbox = outbox ?? GroundworkOutbox(supportDir: directory)
+        ensureSupportDirectoryAndPermissions()
     }
 
-    /// Creates or tightens permissions on the support directory and any contained files.
     func ensureSupportDirectoryAndPermissions() {
         if !fileManager.fileExists(atPath: supportDir.path) {
             try? fileManager.createDirectory(
@@ -76,24 +75,36 @@ final class SessionLogger {
                 ofItemAtPath: supportDir.path
             )
         }
-
-        // Tighten existing files inside supportDir to owner-only read/write (0600)
-        if let contents = try? fileManager.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: [.isDirectoryKey], options: []) {
+        if let contents = try? fileManager.contentsOfDirectory(
+            at: supportDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) {
             for item in contents {
-                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                let perm = isDir ? Self.directoryPermissions : Self.filePermissions
-                try? fileManager.setAttributes([.posixPermissions: perm], ofItemAtPath: item.path)
+                let isDirectory = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                try? fileManager.setAttributes(
+                    [.posixPermissions: isDirectory ? Self.directoryPermissions : Self.filePermissions],
+                    ofItemAtPath: item.path
+                )
             }
         }
     }
 
+    /// Compatibility entry point for local-only callers. New HUD completions use the structured
+    /// overload below so their stable UUID and clinical snapshot survive relaunch.
     func logCompletion(
         routine: Routine,
         checkedIDs: Set<String>,
         completion: ((Result<SessionRecord, Error>) -> Void)? = nil
     ) {
-        let record = SessionRecord(routine: routine, checkedIDs: checkedIDs)
-        logCompletion(record: record, completion: completion)
+        logCompletion(record: SessionRecord(routine: routine, checkedIDs: checkedIDs), completion: completion)
+    }
+
+    func logCompletion(
+        completion routineCompletion: RoutineCompletion,
+        callback: @escaping (Result<SessionRecord, Error>) -> Void
+    ) {
+        let record = SessionRecord(completion: routineCompletion, destination: currentOrigin())
+        logCompletion(record: record, completion: callback)
     }
 
     func logCompletion(
@@ -102,171 +113,95 @@ final class SessionLogger {
     ) {
         queue.async {
             do {
-                try self.append(record, to: self.logFile)
+                try self.appendIfNeeded(record)
             } catch {
-                FileHandle.standardError.write(Data("SessionLogger persistence failure: \(error.localizedDescription)\n".utf8))
+                self.report("persistence", error: error)
                 completion?(.failure(error))
                 return
             }
-
-            // Local write succeeded
-            completion?(.success(record))
-            self.push(record)
-        }
-    }
-
-    /// Call once at launch to flush anything that failed to reach Notion last run.
-    func retryPendingSyncs() {
-        queue.async {
-            let pending: [SessionRecord]
-            do {
-                pending = try self.readPending()
-            } catch {
-                self.reportPendingReadFailure(operation: "retry", error: error)
+            guard record.groundworkCompletion != nil else {
+                completion?(.success(record))
                 return
             }
-            guard !pending.isEmpty else { return }
-            for record in pending {
-                self.push(record)
-            }
-        }
-    }
-
-    // MARK: - Notion push
-
-    private func push(_ record: SessionRecord) {
-        deliver(record) { [weak self] result in
-            guard let self else { return }
-            self.queue.async {
+            self.outbox.enqueue(record) { result in
                 switch result {
-                case .success:
-                    self.removeFromPending(record.id)
-                case .failure:
-                    self.addToPending(record)
+                case .success: completion?(.success(record))
+                case .failure(let error):
+                    self.report("outbox persistence", error: error)
+                    completion?(.failure(error))
                 }
             }
         }
     }
 
-    // MARK: - sessions.jsonl (append-only, mode 0600)
+    /// Repairs persistence boundaries before attempting launch-time network delivery.
+    func recoverAndRetry() {
+        queue.async {
+            do {
+                let records = try self.readHistory()
+                self.knownHistoryIDs = Set(records.map(\.id))
+                self.outbox.recover(records: records)
+            } catch {
+                self.report("history recovery", error: error)
+            }
+        }
+    }
+
+    func retryPendingSyncs() { outbox.retryFailed() }
 
     func append(_ record: SessionRecord, to file: URL? = nil) throws {
-        let targetFile = file ?? logFile
+        let target = file ?? logFile
         let line: Data
-        do {
-            line = try encoder.encode(record)
-        } catch {
-            throw SessionLoggerError.encodingFailed(error.localizedDescription)
-        }
+        do { line = try encoder.encode(record) }
+        catch { throw SessionLoggerError.encodingFailed(error.localizedDescription) }
         var data = line
         data.append(UInt8(ascii: "\n"))
 
-        if fileManager.fileExists(atPath: targetFile.path) {
-            try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: targetFile.path)
+        if fileManager.fileExists(atPath: target.path) {
+            try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: target.path)
             do {
-                let handle = try FileHandle(forWritingTo: targetFile)
+                let handle = try FileHandle(forWritingTo: target)
                 defer { try? handle.close() }
                 try handle.seekToEnd()
                 try handle.write(contentsOf: data)
-            } catch {
-                throw SessionLoggerError.writeFailed("Append failed: \(error.localizedDescription)")
-            }
+                try handle.synchronize()
+            } catch { throw SessionLoggerError.writeFailed("Append failed: \(error.localizedDescription)") }
         } else {
-            guard fileManager.createFile(atPath: targetFile.path, contents: data, attributes: [.posixPermissions: Self.filePermissions]) else {
-                throw SessionLoggerError.writeFailed("Failed to create file at \(targetFile.path)")
-            }
+            guard fileManager.createFile(
+                atPath: target.path,
+                contents: data,
+                attributes: [.posixPermissions: Self.filePermissions]
+            ) else { throw SessionLoggerError.writeFailed("Failed to create history file") }
+            do {
+                let handle = try FileHandle(forWritingTo: target)
+                defer { try? handle.close() }
+                try handle.synchronize()
+            } catch { throw SessionLoggerError.writeFailed("Sync failed: \(error.localizedDescription)") }
         }
     }
 
-    // MARK: - pending-sync.json (atomic replacement, mode 0600)
-
-    func readPending() throws -> [SessionRecord] {
-        guard fileManager.fileExists(atPath: pendingFile.path) else {
-            return []
-        }
+    func readHistory() throws -> [SessionRecord] {
+        guard fileManager.fileExists(atPath: logFile.path) else { return [] }
         let data: Data
-        do {
-            data = try Data(contentsOf: pendingFile)
-        } catch {
-            throw SessionLoggerError.readFailed(error.localizedDescription)
+        do { data = try Data(contentsOf: logFile) }
+        catch { throw SessionLoggerError.readFailed(error.localizedDescription) }
+        try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: logFile.path)
+        var records: [SessionRecord] = []
+        for line in data.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
+            do { records.append(try decoder.decode(SessionRecord.self, from: Data(line))) }
+            catch { throw SessionLoggerError.decodingFailed(error.localizedDescription) }
         }
-        try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: pendingFile.path)
-        do {
-            return try decoder.decode([SessionRecord].self, from: data)
-        } catch {
-            throw SessionLoggerError.decodingFailed(error.localizedDescription)
-        }
+        return records
     }
 
-    func writePending(_ records: [SessionRecord]) throws {
-        let data: Data
-        do {
-            data = try encoder.encode(records)
-        } catch {
-            throw SessionLoggerError.encodingFailed(error.localizedDescription)
-        }
-
-        let tempFile = supportDir.appendingPathComponent(".\(pendingFile.lastPathComponent).tmp.\(UUID().uuidString)")
-        defer {
-            try? fileManager.removeItem(at: tempFile)
-        }
-
-        guard fileManager.createFile(atPath: tempFile.path, contents: data, attributes: [.posixPermissions: Self.filePermissions]) else {
-            throw SessionLoggerError.writeFailed("Failed to create temporary file at \(tempFile.path)")
-        }
-
-        // Atomically replace target file using rename() within the same directory
-        if rename(tempFile.path, pendingFile.path) != 0 {
-            let err = String(cString: strerror(errno))
-            throw SessionLoggerError.writeFailed("Atomic rename failed: \(err)")
-        }
+    private func appendIfNeeded(_ record: SessionRecord) throws {
+        if knownHistoryIDs == nil { knownHistoryIDs = Set(try readHistory().map(\.id)) }
+        guard knownHistoryIDs?.contains(record.id) == false else { return }
+        try append(record)
+        knownHistoryIDs?.insert(record.id)
     }
 
-    private func addToPending(_ record: SessionRecord) {
-        let records: [SessionRecord]
-        do {
-            records = try readPending()
-        } catch {
-            reportPendingReadFailure(operation: "add", error: error)
-            return
-        }
-        guard !records.contains(where: { $0.id == record.id }) else { return }
-        do {
-            try writePending(records + [record])
-        } catch {
-            FileHandle.standardError.write(Data("SessionLogger pending-sync add failed: \(error.localizedDescription)\n".utf8))
-        }
-    }
-
-    private func removeFromPending(_ id: UUID) {
-        var records: [SessionRecord]
-        do {
-            records = try readPending()
-        } catch {
-            reportPendingReadFailure(operation: "remove", error: error)
-            return
-        }
-        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
-        records.remove(at: index)
-        do {
-            try writePending(records)
-        } catch {
-            FileHandle.standardError.write(Data("SessionLogger pending-sync remove failed: \(error.localizedDescription)\n".utf8))
-        }
-    }
-
-    private func reportPendingReadFailure(operation: String, error: Error) {
-        let category: String
-        switch error {
-        case SessionLoggerError.decodingFailed:
-            category = "malformed data"
-        case SessionLoggerError.readFailed:
-            category = "unreadable data"
-        default:
-            category = "read error"
-        }
-        FileHandle.standardError.write(Data(
-            "SessionLogger pending-sync \(operation) aborted; existing queue preserved (\(category)).\n".utf8
-        ))
+    private func report(_ operation: String, error: Error) {
+        FileHandle.standardError.write(Data("SessionLogger \(operation) failure: \(error.localizedDescription)\n".utf8))
     }
 }

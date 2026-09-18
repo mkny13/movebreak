@@ -117,10 +117,8 @@ final class SystemKeychainBackend: KeychainStorageBackend {
     }
 }
 
-/// Minimal Keychain wrapper for credentials.
-/// Preserves service name `com.mike.MoveBreak.notion` and account `integrationToken`.
+/// Minimal Keychain wrapper for explicitly named integration credentials.
 enum Keychain {
-    static let defaultService = "com.mike.MoveBreak.notion"
     static var backend: KeychainStorageBackend = SystemKeychainBackend()
 
     @discardableResult
@@ -131,12 +129,12 @@ enum Keychain {
         return try perform()
     }
 
-    static func set(_ value: String, forAccount account: String, service: String = defaultService) throws {
+    static func set(_ value: String, forAccount account: String, service: String) throws {
         let data = Data(value.utf8)
         try backend.set(data: data, account: account, service: service)
     }
 
-    static func get(forAccount account: String, service: String = defaultService) throws -> String? {
+    static func get(forAccount account: String, service: String) throws -> String? {
         guard let data = try backend.get(account: account, service: service) else {
             return nil
         }
@@ -146,7 +144,7 @@ enum Keychain {
         return string
     }
 
-    static func delete(forAccount account: String, service: String = defaultService) throws {
+    static func delete(forAccount account: String, service: String) throws {
         try backend.delete(account: account, service: service)
     }
 }

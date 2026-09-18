@@ -24,8 +24,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --demo-pt       Launch and show the PT checklist immediately.
       --demo-builder  Launch and show the routine editor immediately.
 
-      --configure-notion  Set up Notion session logging (integration token + database ID).
-      --configure-groundwork  Set up Groundwork routine access (URL, location, duration + token).
+      --configure-groundwork  Set up Groundwork routines and completion sync.
 
     Control an already-running instance (works when the menu bar is full and the
     status item cannot be shown):
@@ -73,10 +72,6 @@ if arguments.contains("--tabs") {
 
 if arguments.contains("--diagnose") {
     Diagnose.run(verbose: arguments.contains("--verbose"))
-}
-
-if arguments.contains("--configure-notion") {
-    NotionSetup.run()
 }
 
 if arguments.contains("--configure-groundwork") {

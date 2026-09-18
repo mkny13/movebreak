@@ -3,20 +3,35 @@ import SwiftUI
 
 final class RoutineWindowController {
     private var panel: FloatingPanel?
-    var onFinish: ((RoutineCompletion) -> Void)?
+    private var tracker: RoutineSessionTracker?
+    private var pendingCompletion: RoutineCompletion?
+    var onFinish: ((RoutineCompletion, @escaping (Result<Void, Error>) -> Void) -> Void)?
 
     func show(_ routine: Routine) {
         close()
         let tracker = RoutineSessionTracker(routine: routine)
+        self.tracker = tracker
+        pendingCompletion = nil
         let panel = FloatingPanel(size: NSSize(width: 430, height: 640), title: routine.title)
-        panel.setContent(RoutineView(routine: routine) { [weak self] checked, doses, reasons in
-            guard let completion = tracker.finish(
-                checkedIDs: checked,
-                actualDoses: doses,
-                warningReasons: reasons
-            ) else { return }
-            self?.close()
-            self?.onFinish?(completion)
+        panel.setContent(RoutineView(routine: routine) { [weak self] checked, doses, reasons, saved in
+            guard let self else { return }
+            if self.pendingCompletion == nil {
+                self.pendingCompletion = tracker.finish(
+                    checkedIDs: checked,
+                    actualDoses: doses,
+                    warningReasons: reasons
+                )
+            }
+            guard let completion = self.pendingCompletion, let onFinish = self.onFinish else {
+                saved(.failure(RoutineWindowError.persistenceUnavailable))
+                return
+            }
+            onFinish(completion) { [weak self] result in
+                onMain {
+                    if case .success = result { self?.close() }
+                    saved(result)
+                }
+            }
         })
         panel.present()
         self.panel = panel
@@ -25,18 +40,30 @@ final class RoutineWindowController {
     func close() {
         panel?.close()
         panel = nil
+        tracker = nil
+        pendingCompletion = nil
     }
 
     var isVisible: Bool { panel != nil }
 }
 
+private enum RoutineWindowError: Error, LocalizedError {
+    case persistenceUnavailable
+    var errorDescription: String? { "Completion could not be saved. Try again." }
+}
+
 private struct RoutineView: View {
     let routine: Routine
-    let onDone: (Set<String>, [String: GroundworkActualDose], [String: String]) -> Void
+    let onDone: (
+        Set<String>, [String: GroundworkActualDose], [String: String],
+        @escaping (Result<Void, Error>) -> Void
+    ) -> Void
 
     @State private var checked: Set<String> = []
     @State private var doseValues: [String: String] = [:]
     @State private var warningReasons: [String: String] = [:]
+    @State private var isSaving = false
+    @State private var saveError: String?
 
     private var grouped: [(area: String, exercises: [Exercise])] {
         if routine.isGenerated { return [("", routine.exercises)] }
@@ -130,15 +157,25 @@ private struct RoutineView: View {
                 Text("Enter a reason for each warning before finishing.")
                     .font(.caption2).foregroundStyle(.orange)
             }
+            if let saveError {
+                Text(saveError).font(.caption2).foregroundStyle(.red)
+            }
             HStack(spacing: 10) {
                 Text("\(TreadmillTag.walkSafe.badge) keep walking")
                 Text("\(TreadmillTag.pauseTreadmill.badge) pause belt")
                 Spacer(minLength: 0)
                 Button("Done") {
-                    onDone(checked, actualDoses(), warningReasons)
+                    isSaving = true
+                    saveError = nil
+                    onDone(checked, actualDoses(), warningReasons) { result in
+                        isSaving = false
+                        if case .failure(let error) = result {
+                            saveError = error.localizedDescription
+                        }
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!warningReasonsComplete)
+                .disabled(!warningReasonsComplete || isSaving)
             }
             .font(.caption2).foregroundStyle(.secondary)
         }
