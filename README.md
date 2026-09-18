@@ -232,6 +232,7 @@ Run `./build/MoveBreak --help` for the executable's authoritative help. The ship
 | `--demo-pt` | Launch and show the PT checklist. |
 | `--demo-builder` | Launch and show the routine editor. |
 | `--configure-notion` | Interactively configure optional Notion sync and exit. |
+| `--configure-groundwork` | Interactively store Groundwork URL, location, duration, and an origin-bound Keychain token, then exit. |
 | `--show` | Ask an already-running instance to show the prompt, then exit. |
 | `--toggle-pause` | Ask an already-running instance to pause/resume, then exit. |
 | `--quit` | Ask an already-running instance to quit, then exit. |
@@ -239,7 +240,7 @@ Run `./build/MoveBreak --help` for the executable's authoritative help. The ship
 | `--check-update-now` | Check once for an update and exit; installation requires stable signing. |
 
 Secrets are rejected in command-line arguments. In particular, do not invent token flags;
-use the interactive `--configure-notion` flow.
+use the appropriate interactive `--configure-notion` or `--configure-groundwork` flow.
 
 The repository scripts are:
 
@@ -269,13 +270,14 @@ defaults write com.mike.movebreak promptTimeout -float 45
 # Reset one setting to its built-in default.
 defaults delete com.mike.movebreak musicPatterns
 
-# Reset every preference, including saved routines and the Notion database ID.
-# This does not delete local history or the Notion token in Keychain.
+# Reset every preference, including saved routines and non-secret integration settings.
+# This does not delete local history or integration tokens in Keychain.
 defaults delete com.mike.movebreak
 ```
 
-The app also owns `savedRoutines` (JSON-encoded routine definitions) and
-`notionDatabaseID` (the non-secret Notion database identifier) in this domain. Treat
+The app also owns `savedRoutines` (JSON-encoded routine definitions),
+`notionDatabaseID`, `groundworkBaseURL`, `groundworkLocationID`, and
+`groundworkDurationMinutes` in this domain. Treat
 `savedRoutines` as app-managed data rather than editing its encoded value with `defaults`.
 
 Invalid numeric values fall back to their built-in defaults:
@@ -338,10 +340,36 @@ Saved routine definitions and other non-secret preferences live in `UserDefaults
 the Application Support directory. MoveBreak does not store audio or a general browser
 history. Diagnostic commands print hosts unless `--verbose` is explicitly supplied.
 
+## Groundwork transport setup
+
+Groundwork transport, strict version-1 wire models, and an offline routine cache are shipped
+as infrastructure for the later generated-routine HUD. The current prompt and checklist still
+use local saved routines and do not poll Groundwork. Configuration therefore has no visible UI
+effect yet and unconfigured startup performs no Groundwork request.
+
+When a compatible Groundwork deployment is available, configure it interactively:
+
+```bash
+./MoveBreak.app/Contents/MacOS/MoveBreak --configure-groundwork
+```
+
+Enter an HTTPS deployment root, an existing Groundwork location ID, a default duration from
+1 through 30 minutes, and the dedicated bearer token. HTTP is accepted only for an explicit
+loopback host (`localhost`, `127.0.0.1`, or `::1`) used in local development. The token prompt
+does not echo. Tokens use the separate Keychain service `com.mike.MoveBreak.groundwork` and an
+account derived from the exact URL origin, so a token configured for one scheme/host/port is
+not available to another. Non-secret settings remain in `UserDefaults`.
+
+Only successfully validated, nonempty live routines are cached. Cache entries are isolated by
+origin, location, duration, and schema version. A future offline HUD can label a cached copy
+with its timestamp and “not revalidated” status, or use clearly labeled bundled/local defaults
+when no cache exists. A valid empty live response remains empty. Authentication, unavailable,
+malformed, corrupt-cache, and unconfigured states are kept separate.
+
 ## Optional Notion sync
 
-Groundwork integration is not shipped. The only current remote completion integration is
-optional Notion sync; local history works without it.
+Groundwork completion delivery and generated-routine UI are not shipped. The only current
+remote completion integration is optional Notion sync; local history works without it.
 
 Create a Notion internal integration and a database shared with that integration. The
 database must have these properties with matching names and types: `Entry` (title), `Date`
@@ -434,11 +462,12 @@ These observations explain current choices; they are not universal setup promise
 - Full-screen auxiliary panel behavior can depend on the conferencing app and macOS version;
   use `--demo` and a real call to validate it on the target Mac.
 
-## Planned Groundwork integration
+## Planned Groundwork UI and completion integration
 
-Groundwork does not currently generate MoveBreak routines, receive completions, provide
-credentials, or own persistence. The bundled catalog, local routine editor and shuffle,
-local JSONL history, and optional Notion sync are all shipped and remain active.
+MoveBreak now has configurable Groundwork credentials, native request/response models, and a
+durable offline routine cache, but the app does not yet fetch for its prompt, display generated
+routines, or deliver completions. The bundled catalog, local routine editor and shuffle, local
+JSONL history, and optional Notion sync remain active.
 
 [ROADMAP.md](ROADMAP.md) is the authoritative shipped/planned boundary. The planned migration
 is tracked by [issue #2](https://github.com/mkny13/movebreak/issues/2) and its dependent

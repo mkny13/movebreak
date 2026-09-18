@@ -3,8 +3,8 @@ import Foundation
 
 let rawArguments = CommandLine.arguments.dropFirst()
 for arg in rawArguments {
-    if arg.hasPrefix("--token") || arg.hasPrefix("--secret") || arg.hasPrefix("--notion-token") || arg.hasPrefix("--api-key") {
-        FileHandle.standardError.write(Data("error: secrets must not be provided via command-line arguments. Use --configure-notion for secure interactive setup.\n".utf8))
+    if arg.hasPrefix("--token") || arg.hasPrefix("--secret") || arg.hasPrefix("--notion-token") || arg.hasPrefix("--groundwork-token") || arg.hasPrefix("--api-key") {
+        FileHandle.standardError.write(Data("error: secrets must not be provided via command-line arguments. Use an interactive configure command.\n".utf8))
         exit(1)
     }
 }
@@ -25,6 +25,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --demo-builder  Launch and show the routine editor immediately.
 
       --configure-notion  Set up Notion session logging (integration token + database ID).
+      --configure-groundwork  Set up Groundwork routine access (URL, location, duration + token).
 
     Control an already-running instance (works when the menu bar is full and the
     status item cannot be shown):
@@ -76,6 +77,10 @@ if arguments.contains("--diagnose") {
 
 if arguments.contains("--configure-notion") {
     NotionSetup.run()
+}
+
+if arguments.contains("--configure-groundwork") {
+    GroundworkSetup.run()
 }
 
 let application = NSApplication.shared

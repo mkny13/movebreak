@@ -587,9 +587,9 @@ enum SecuritySelfTests {
         }
 
         // 4. CLI Argument check: verify rejection of secret argument flags
-        let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--api-key"]
+        let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--groundwork-token", "--api-key"]
         for flag in forbiddenFlags {
-            let isRejected = flag.hasPrefix("--token") || flag.hasPrefix("--secret") || flag.hasPrefix("--notion-token") || flag.hasPrefix("--api-key")
+            let isRejected = flag.hasPrefix("--token") || flag.hasPrefix("--secret") || flag.hasPrefix("--notion-token") || flag.hasPrefix("--groundwork-token") || flag.hasPrefix("--api-key")
             reporter.check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)
         }
 

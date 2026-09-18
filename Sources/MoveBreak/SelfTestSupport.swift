@@ -6,6 +6,7 @@ enum SelfTestSuiteID: String, CaseIterable {
     case security
     case persistence
     case update
+    case groundwork
 }
 struct SelfTestSuite {
     let id: SelfTestSuiteID

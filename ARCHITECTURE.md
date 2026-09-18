@@ -1,7 +1,8 @@
 # MoveBreak architecture
 
 This document is the canonical description of MoveBreak's shipped implementation. It
-describes the current code, not the planned Groundwork integration. See [ROADMAP.md](ROADMAP.md)
+describes the current code, including dormant Groundwork transport infrastructure, rather
+than later HUD and completion-sync behavior. See [ROADMAP.md](ROADMAP.md)
 for future work and [README.md](README.md) for user setup, operation, and troubleshooting.
 
 ## Runtime boundary and entry points
@@ -12,7 +13,7 @@ Foundation/Security for persistence, networking, subprocesses, and Keychain acce
 no service process, database, Xcode project, Swift package, or third-party dependency.
 
 The executable first rejects command-line secrets. Help, version, self-test, browser-tab
-probe, live diagnostics, interactive Notion setup, one-shot update check, and same-user
+probe, live diagnostics, interactive Notion or Groundwork setup, one-shot update check, and same-user
 remote-control flags terminate without entering the long-running app. Demo and status-check
 flags instead modify an app launch. Normal launch creates `AppDelegate`, selects accessory
 activation policy (no Dock icon), and enters the AppKit run loop.
@@ -124,6 +125,25 @@ database ID to preferences. The generic-password item uses account `integrationT
 values. The client sends completed session summaries directly to Notion's page-creation API
 over HTTPS.
 
+Groundwork setup is available through `--configure-groundwork`, but the current UI does not
+yet call the integration. Setup accepts HTTPS deployment roots (or explicit loopback HTTP for
+development), an existing location ID, and a 1–30 minute default. It commits non-secret values
+to preferences only after writing the token to the separate
+`com.mike.MoveBreak.groundwork` Keychain service, under an account derived from the exact
+scheme/host/port origin. A newly selected origin therefore cannot retrieve another origin's
+token.
+
+The Groundwork client has injectable asynchronous transport, a bounded request timeout,
+cancellation, typed authentication/retryable/permanent failures, strict version-1 model
+validation, and GET/POST request construction. Its URLSession redirect delegate allows only
+same-origin redirects and rejects cross-origin or HTTPS-to-HTTP redirects before credentials
+can be forwarded. Successful nonempty routines can be atomically cached under
+`~/Library/Application Support/MoveBreak/GroundworkRoutineCache/`, keyed by schema, origin,
+location, and duration. Offline cache labels include their timestamp and explicitly say they
+were not revalidated; corrupt, absent, auth-failed, malformed, unavailable, live-empty, and
+unconfigured states remain distinct. Live empty results are never replaced by cached or
+bundled content. No refresh occurs at startup or from the audio polling loop in this slice.
+
 Local session data lives under `~/Library/Application Support/MoveBreak/`. The directory is
 created or tightened to mode `0700`; contained files are tightened to `0600`.
 `sessions.jsonl` is append-only local history and is written before a network request.
@@ -214,7 +234,7 @@ Each tracked Swift source appears exactly once below.
 | [`Diagnose.swift`](Sources/MoveBreak/Diagnose.swift) | Runs the live audio/tab/classification diagnostic table. |
 | [`TabProbe.swift`](Sources/MoveBreak/TabProbe.swift) | Runs one-shot inspection of supported running browsers. |
 | [`URLDisplay.swift`](Sources/MoveBreak/URLDisplay.swift) | Sanitizes diagnostic URLs to privacy-preserving display strings. |
-| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides and the non-secret Notion database preference. |
+| [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides plus non-secret Notion and Groundwork preferences. |
 
 ### Routine domain and UI
 
@@ -239,6 +259,15 @@ Each tracked Swift source appears exactly once below.
 | [`Keychain.swift`](Sources/MoveBreak/Keychain.swift) | Wraps device-local Keychain storage behind typed errors and a testable backend. |
 | [`SecretInput.swift`](Sources/MoveBreak/SecretInput.swift) | Reads terminal secrets with echo disabled and signal-safe restoration. |
 
+### Groundwork transport infrastructure
+
+| Module | Responsibility |
+|---|---|
+| [`GroundworkModels.swift`](Sources/MoveBreak/GroundworkModels.swift) | Defines and validates versioned routine, dose, warning, provenance, completion, and receipt wire models. |
+| [`GroundworkClient.swift`](Sources/MoveBreak/GroundworkClient.swift) | Builds authenticated GET/POST requests, maps typed failures, supports cancellation, and enforces redirect-origin policy. |
+| [`GroundworkRoutineCache.swift`](Sources/MoveBreak/GroundworkRoutineCache.swift) | Atomically stores validated nonempty routines and resolves explicit live, empty, offline, corrupt, and fallback states. |
+| [`GroundworkSetup.swift`](Sources/MoveBreak/GroundworkSetup.swift) | Validates interactive Groundwork configuration and stores origin-bound credentials. |
+
 ### Updates and process execution
 
 | Module | Responsibility |
@@ -258,5 +287,6 @@ Each tracked Swift source appears exactly once below.
 | [`PersistenceSelfTests.swift`](Sources/MoveBreak/PersistenceSelfTests.swift) | Tests records, routine persistence, local history, permissions, and pending queues. |
 | [`SecuritySelfTests.swift`](Sources/MoveBreak/SecuritySelfTests.swift) | Tests secret input, Keychain behavior, credential boundaries, and URL redaction. |
 | [`UpdateSelfTests.swift`](Sources/MoveBreak/UpdateSelfTests.swift) | Tests download completion races plus release, archive, bundle, staging, signer, and subprocess update boundaries. |
+| [`GroundworkSelfTests.swift`](Sources/MoveBreak/GroundworkSelfTests.swift) | Tests the offline wire contract, request/failure boundary, redirect policy, cache provenance, and setup isolation. |
 
 <!-- architecture-module-inventory:end -->

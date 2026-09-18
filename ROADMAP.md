@@ -14,20 +14,22 @@ MoveBreak currently:
 - offers locally saved routines from a bundled exercise catalog in native floating panels;
 - lets the user edit those routines locally and records explicitly checked exercises;
 - appends completion history locally, then optionally syncs summaries to Notion with a
-  best-effort pending queue; and
+  best-effort pending queue;
+- provides dormant, configurable Groundwork transport with strict versioned models, separate
+  origin-bound credentials, and an atomically persisted labeled offline routine cache; and
 - checks GitHub releases through a fail-closed digest, bundle, containment, and signer trust
   boundary.
 
-Groundwork does not currently generate MoveBreak routines, receive MoveBreak completions,
-or provide MoveBreak's active persistence. Any prose describing those behaviors is future
-state until its implementation issue merges.
+Groundwork does not currently feed the MoveBreak UI, receive MoveBreak completions, or provide
+MoveBreak's active persistence. Transport/cache infrastructure alone does not change those
+runtime boundaries.
 
 ## Planned Groundwork migration
 
-[Issue #2](https://github.com/mkny13/movebreak/issues/2) is the open umbrella. Issues
-#3–#7 are also open, so none of the behavior in this section is shipped. The first two
-implementation changes belong to `mkny13/groundwork` even though their coordinating issues
-are tracked in this repository; the remaining three change `mkny13/movebreak`.
+[Issue #2](https://github.com/mkny13/movebreak/issues/2) is the open umbrella. The first two
+backend stages belong to `mkny13/groundwork` even though their coordinating issues are tracked
+in this repository; the remaining stages change `mkny13/movebreak`. Issue #5's client-side
+infrastructure is shipped, while HUD wiring and completion delivery remain planned.
 
 | Issue | Implementation repository | Depends on | Planned boundary |
 |---|---|---|---|
