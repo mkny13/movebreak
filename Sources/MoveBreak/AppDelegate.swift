@@ -326,6 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         retrySync.target = self
         retrySync.tag = MenuTag.retrySync.rawValue
+        retrySync.isEnabled = GroundworkOutbox.shared.status.pending > 0
         menu.addItem(retrySync)
 
         menu.addItem(.separator())

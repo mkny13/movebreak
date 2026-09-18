@@ -143,6 +143,8 @@ final class SessionLogger {
                 self.outbox.recover(records: records)
             } catch {
                 self.report("history recovery", error: error)
+                // Corrupt history must not prevent already-durable outbox work from draining.
+                self.outbox.drain()
             }
         }
     }

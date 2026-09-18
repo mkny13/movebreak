@@ -253,6 +253,7 @@ final class GroundworkOutbox {
         publishStatus(document)
         let current = now()
         guard let index = document.items.firstIndex(where: {
+            guard $0.destination != nil else { return false }
             switch $0.state {
             case .queued: return true
             case .retryScheduled: return ($0.nextAttemptAt ?? .distantPast) <= current
@@ -347,6 +348,7 @@ final class GroundworkOutbox {
         do {
             try writeDocument(document)
             publishStatus(document)
+            drainOnQueue()
         } catch { report("pause", error: error) }
     }
 

@@ -266,15 +266,16 @@ enum PersistenceSelfTests {
         let legacyBytes = Data("LEGACY_NOTION_QUEUE_MUST_STAY_UNTOUCHED".utf8)
         _ = FileManager.default.createFile(atPath: legacyPending.path, contents: legacyBytes)
 
-        outbox.enqueue(SessionRecord(completion: valueA, destination: originA)) { _ in }
-        reporter.check("Destination change does not reassign queued health data", eventually {
-            observed.value.first == originA && load(outbox)?.delivered.count == 1
-        })
-
         outbox.enqueue(SessionRecord(completion: valueUnbound, destination: nil)) { _ in }
         Thread.sleep(forTimeInterval: 0.05)
-        reporter.check("Unconfigured completion stays visible without network", transport.requestCount == 1
+        reporter.check("Unconfigured completion stays visible without network", transport.requestCount == 0
             && outbox.status.failed == 1)
+        outbox.enqueue(SessionRecord(completion: valueA, destination: originA)) { _ in }
+        reporter.check("Unconfigured work does not block a later bound destination", eventually {
+            observed.value.first == originA && load(outbox)?.delivered.count == 1
+        })
+        reporter.check("Destination change does not reassign queued health data",
+            observed.value.first == originA)
         outbox.retryFailed()
         reporter.check("Explicit retry binds an unconfigured record to current origin", eventually {
             observed.value.last == originB && load(outbox)?.delivered.count == 2
