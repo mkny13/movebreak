@@ -1,0 +1,27 @@
+# Repository-side verify, release, environment, and persistence contract for Mahler.
+
+[verify]
+fast = "./scripts/build_app.sh"
+full = "./scripts/build_app.sh"
+
+[release]
+how = "Push a vMAJOR.MINOR or vMAJOR.MINOR.PATCH tag; .github/workflows/build.yml stamps the version, imports the MoveBreak Signing certificate into an ephemeral keychain, builds, packages MoveBreak.app.zip, and publishes the signed asset to a GitHub Release. Agents do not publish releases."
+rollback = "Install the previous signed MoveBreak.app.zip from GitHub Releases. The updater also leaves the installed bundle untouched when candidate validation or replacement fails; rollback follows the normal verified release path rather than rewriting production data."
+
+[environments]
+production = "The user's certificate-signed MoveBreak.app, local com.mike.movebreak UserDefaults, Application Support files, origin-bound Keychain credential, and configured Groundwork production origin."
+ci = "An ephemeral macos-14 GitHub Actions runner using an ad-hoc signature for pull requests and main pushes; self-tests use temporary files, isolated UserDefaults suites, mock Keychain backends, and injected transports."
+isolation = "CI has no production signing credential, user preferences, Application Support directory, Keychain token, or live Groundwork access. Release signing secrets exist only in the tag-gated release job's temporary keychain."
+
+[data]
+preferences = "UserDefaults domain com.mike.movebreak: detection/timing settings, non-secret Groundwork configuration, and saved routines. Back up and restore with the user's normal macOS account backup; tests use isolated suites."
+local_history = "~/Library/Application Support/MoveBreak/sessions.jsonl: append-only local completion history, protected as owner-only data. Back up and restore the MoveBreak Application Support directory while the app is stopped."
+groundwork_outbox = "~/Library/Application Support/MoveBreak/groundwork-outbox-v1.json: atomic origin-bound pending completions and receipt history. Back up and restore with the Application Support directory; never rebind records to another origin implicitly."
+groundwork_cache = "~/Library/Application Support/MoveBreak/GroundworkRoutineCache/: replaceable origin/location/duration/schema-bound routine cache. It may be omitted from restore; the app falls back safely when it is absent or invalid."
+groundwork_history = "The configured Groundwork origin owns remotely accepted History records; MoveBreak writes them only through idempotent outbox delivery. Backup and restore policy belongs to that Groundwork deployment, and MoveBreak tests use injected transport rather than live History."
+credentials = "Keychain service com.mike.MoveBreak.groundwork with an account derived from the exact scheme/host/port origin. Credentials are device-local, are never copied into backups or CI, and must be reconfigured for a replacement installation or origin."
+
+[canary]
+before_compile = "./scripts/build_app.sh first runs scripts/check_agent_context.sh and scripts/check_architecture_docs.sh; they reject a noncanonical CLAUDE.md, oversized/missing AGENTS.md, forbidden DESIGN.md, or a stale Swift module inventory before swiftc runs."
+after_compile = "The same build checks documentation links and CLI coverage, then runs the complete ./build/MoveBreak --self-test suite before assembly and signing. Any check failure aborts the build."
+wrong_checkout = "The canonical agent-context check and tracked-source architecture inventory are checkout-relative, so a deliberately broken AGENTS.md or ARCHITECTURE.md fixture must fail instead of silently validating another checkout."

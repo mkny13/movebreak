@@ -33,6 +33,20 @@ To run self-test directly:
 ./build/MoveBreak --self-test
 ```
 
+## Mahler workflow
+
+- [`.mahler/project.toml`](.mahler/project.toml) is the repository contract for verification,
+  release, environment isolation, persistent data, rollback, and canary checks.
+- Mahler owns job worktrees and `mahler/*` branches. Work only in the assigned worktree; never
+  create or remove worktrees, edit the main checkout, or move work between checkouts.
+- A job ends only after its changes are committed, the full verify command passes, and the branch
+  is pushed. Reporting `STATUS: DONE` with nothing pushed is a failed attempt.
+- Agents do not open, watch, merge, or otherwise manage pull requests. Mahler's conductor owns
+  those mechanical steps after the agent exits.
+- End the final response with exactly one Mahler status line: `STATUS: DONE <summary>`,
+  `STATUS: NEEDS-YOU <question>`, `STATUS: BLOCKED <reason>`, or
+  `STATUS: YIELDED <handoff>`.
+
 ## Conventions
 
 - AppKit UI creation must stay on the main thread (see `MainThread.swift` and `FloatingPanel.swift`).
