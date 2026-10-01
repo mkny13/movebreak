@@ -15,7 +15,7 @@ import tempfile
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
     '.github/workflows/build.yml': '29ac03f2c5fb977e2747461adcb274118a41f27eb4d6ff6ab0522f87bbb6b3f6',
-    'scripts/build_app.sh': '5e48c15f3ef046beb3ea875751a6b42c602a8d68d7acddc11337f2c680e93e93',
+    'scripts/build_app.sh': 'c75da6100bcc564acd8155564173f07060f0caece6929df2b9485575b3a89792',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
     'scripts/check_documentation.sh': '19111a50a3f0ad954eeb7768c5bd22fe0a44607574884e609a73f47b7190ff0d',

@@ -204,7 +204,9 @@ outlive the returned result.
 ## Security-surface review gate
 
 `scripts/check_security_surface.sh` is an offline, standard-library-only Python 3 gate
-invoked through Bash before compilation. The build runs its `--self-test` fixtures as well.
+invoked through Bash before any other build helper or compilation, so changed helper
+hashes are rejected before those scripts can execute. The build runs its `--self-test`
+fixtures as well.
 It checks the working tree, including ignored/untracked inputs, excluding only `.git` and
 the generated root `build/` and `MoveBreak.app/` trees. Symlinks, unexpected Swift inputs,
 package manifests/lockfiles, environment files, vendored roots, and additional executable

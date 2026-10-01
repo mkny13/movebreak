@@ -23,14 +23,14 @@ IDENTITY="${1:--}"
 APP="MoveBreak.app"
 DEPLOY_TARGET="arm64-apple-macosx14.4"
 
+echo "==> Checking security surface"
+./scripts/check_security_surface.sh --self-test
+
 echo "==> Checking repository agent context"
 ./scripts/check_agent_context.sh
 
 echo "==> Checking architecture documentation"
 ./scripts/check_architecture_docs.sh
-
-echo "==> Checking security surface"
-./scripts/check_security_surface.sh --self-test
 
 # NUL-delimited tracked inputs only; the gates reject missing, untracked, symlinked,
 # or undocumented sources before this list reaches swiftc.
