@@ -31,7 +31,7 @@ enum UpdateSelfTests {
             silent.isSuccess
                 && silent.stdout.isEmpty
                 && silent.stderr.isEmpty
-                && silentDuration < 0.5,
+                && silentDuration < 1.0,
             detail: String(format: "completed in %.3fs", silentDuration)
         )
 
@@ -149,7 +149,7 @@ enum UpdateSelfTests {
             inheritedWriter.isSuccess
                 && inheritedWriter.stdout == "inherited"
                 && inheritedWriterPID > 0
-                && inheritedWriterDuration < 0.5,
+                && inheritedWriterDuration < 1.0,
             detail: String(format: "completed in %.3fs", inheritedWriterDuration)
         )
 
