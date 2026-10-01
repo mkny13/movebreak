@@ -303,10 +303,14 @@ final class Updater {
         guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return .failure("no Application Support directory")
         }
-        let updatesRoot = appSupport.appendingPathComponent("MoveBreak/Updates", isDirectory: true)
+        let requestedUpdatesRoot = appSupport.appendingPathComponent("MoveBreak/Updates", isDirectory: true)
+        let updatesRoot: URL
 
         do {
-            try StagingPathValidation.ensureSecureDirectory(at: updatesRoot)
+            updatesRoot = try StagingPathValidation.prepareSecureDirectory(
+                at: requestedUpdatesRoot,
+                containedIn: appSupport
+            )
         } catch {
             return .failure("could not prepare updates root: \(error.localizedDescription)")
         }
@@ -314,9 +318,13 @@ final class Updater {
         // Drop staging directories from previous checks so these don't accumulate.
         StagingPathValidation.cleanStagingRoot(at: updatesRoot)
 
-        let stagingDir = updatesRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let requestedStagingDir = updatesRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stagingDir: URL
         do {
-            try StagingPathValidation.ensureSecureDirectory(at: stagingDir)
+            stagingDir = try StagingPathValidation.prepareSecureDirectory(
+                at: requestedStagingDir,
+                containedIn: updatesRoot
+            )
         } catch {
             return .failure("could not create staging directory: \(error.localizedDescription)")
         }
@@ -328,25 +336,39 @@ final class Updater {
             return .failure(error)
         }
 
+        let canonicalArchive: URL
         do {
-            try ArchiveDigestValidation.verifyArchive(at: zipPath, expectedHexDigest: candidate.expectedDigest)
+            canonicalArchive = try StagingPathValidation.validateArchive(
+                at: zipPath,
+                stagingDir: stagingDir
+            )
+            try ArchiveDigestValidation.verifyArchive(
+                at: canonicalArchive,
+                expectedHexDigest: candidate.expectedDigest
+            )
         } catch {
             try? fm.removeItem(at: stagingDir)
             return .failure(error.localizedDescription)
         }
 
-        let unzipResult = ProcessRunner.run(
-            executable: "/usr/bin/ditto",
-            arguments: ["-x", "-k", zipPath.path, stagingDir.path],
-            timeout: 60.0
-        )
+        let unzipResult = UpdateToolCommand.extractArchive(
+            archive: canonicalArchive,
+            destination: stagingDir
+        ).run()
         guard unzipResult.isSuccess else {
             try? fm.removeItem(at: stagingDir)
             let detail = unzipResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return .failure("couldn't unzip download: \(detail.isEmpty ? "exit code \(unzipResult.exitCode)" : detail)")
         }
 
-        try? fm.removeItem(at: zipPath)
+        do {
+            try StagingPathValidation.validateExtractedTree(in: stagingDir)
+        } catch {
+            try? fm.removeItem(at: stagingDir)
+            return .failure(error.localizedDescription)
+        }
+
+        try? fm.removeItem(at: canonicalArchive)
 
         let appURL = stagingDir.appendingPathComponent("MoveBreak.app")
         let expectedBundleID = Bundle.main.bundleIdentifier ?? "com.mike.movebreak"
@@ -379,11 +401,7 @@ final class Updater {
         // URLSession-downloaded files carry com.apple.quarantine; the bundle isn't
         // notarized, so Gatekeeper would block it on relaunch unless this is cleared.
         // Clear quarantine ONLY after every signature, digest, and containment check succeeds.
-        let xattrResult = ProcessRunner.run(
-            executable: "/usr/bin/xattr",
-            arguments: ["-dr", "com.apple.quarantine", appURL.path],
-            timeout: 30.0
-        )
+        let xattrResult = UpdateToolCommand.removeQuarantine(bundle: appURL).run()
         guard xattrResult.isSuccess else {
             try? fm.removeItem(at: stagingDir)
             return .failure("couldn't clear quarantine flag")

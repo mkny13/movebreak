@@ -45,6 +45,52 @@ struct ProcessInvocation: Equatable {
     }
 }
 
+/// The complete production subprocess surface for automatic updates. Each case selects a
+/// reviewed absolute system executable, constructs its own arguments, terminates option
+/// parsing before file paths, and supplies no inherited environment.
+enum UpdateToolCommand {
+    case extractArchive(archive: URL, destination: URL)
+    case verifyCodeSignature(bundle: URL)
+    case removeQuarantine(bundle: URL)
+
+    var invocation: ProcessInvocation {
+        switch self {
+        case .extractArchive(let archive, let destination):
+            return ProcessInvocation(
+                executable: "/usr/bin/ditto",
+                arguments: ["-x", "-k", "--", archive.path, destination.path]
+            )
+        case .verifyCodeSignature(let bundle):
+            return ProcessInvocation(
+                executable: "/usr/bin/codesign",
+                arguments: ["--verify", "--deep", "--strict", "--", bundle.path]
+            )
+        case .removeQuarantine(let bundle):
+            return ProcessInvocation(
+                executable: "/usr/bin/xattr",
+                arguments: ["-d", "-r", "-s", "com.apple.quarantine", "--", bundle.path]
+            )
+        }
+    }
+
+    var timeout: TimeInterval {
+        switch self {
+        case .extractArchive:
+            return 60
+        case .verifyCodeSignature, .removeQuarantine:
+            return 30
+        }
+    }
+
+    func run(
+        using executor: (ProcessInvocation, TimeInterval) -> ProcessResult = {
+            ProcessRunner.run(invocation: $0, timeout: $1)
+        }
+    ) -> ProcessResult {
+        executor(invocation, timeout)
+    }
+}
+
 /// Runs a child process while continuously draining both output pipes.
 ///
 /// Pipe reads are nonblocking and serialized on the calling thread. This avoids both

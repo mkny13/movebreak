@@ -6,6 +6,8 @@ import Security
 
 enum StagingPathError: Error, CustomStringConvertible, Equatable {
     case stagingDirectoryEscaped(String)
+    case invalidStagingDirectory(String)
+    case invalidArchive(String)
     case appNotFound(String)
     case appIsSymlink(String)
     case appEscapesStaging(String)
@@ -16,6 +18,10 @@ enum StagingPathError: Error, CustomStringConvertible, Equatable {
         switch self {
         case .stagingDirectoryEscaped(let path):
             return "staging directory escaped root: \(path)"
+        case .invalidStagingDirectory(let message):
+            return "invalid staging directory: \(message)"
+        case .invalidArchive(let message):
+            return "invalid update archive: \(message)"
         case .appNotFound(let path):
             return "no MoveBreak.app found in staging directory: \(path)"
         case .appIsSymlink(let path):
@@ -32,6 +38,12 @@ enum StagingPathError: Error, CustomStringConvertible, Equatable {
 
 enum StagingPathValidation {
     static func ensureSecureDirectory(at url: URL) throws {
+        _ = try prepareSecureDirectory(at: url)
+    }
+
+    /// Creates or validates a private directory and returns its canonical location. When a
+    /// root is supplied, symlinked path components below that root are rejected.
+    static func prepareSecureDirectory(at url: URL, containedIn root: URL? = nil) throws -> URL {
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: url.path) {
             try fileManager.createDirectory(
@@ -40,7 +52,22 @@ enum StagingPathValidation {
                 attributes: [.posixPermissions: 0o700]
             )
         }
-        _ = chmod(url.path, 0o700)
+
+        var directoryStat = stat()
+        guard lstat(url.path, &directoryStat) == 0,
+              (directoryStat.st_mode & S_IFMT) == S_IFDIR else {
+            throw StagingPathError.invalidStagingDirectory("not a real directory at \(url.path)")
+        }
+        guard chmod(url.path, 0o700) == 0 else {
+            throw StagingPathError.invalidStagingDirectory(
+                "could not set mode 0700 at \(url.path): \(String(cString: strerror(errno)))"
+            )
+        }
+
+        if let root {
+            return try canonicalContainedURL(url, in: root)
+        }
+        return URL(fileURLWithPath: canonicalPath(url), isDirectory: true)
     }
 
     static func cleanStagingRoot(at url: URL) {
@@ -48,6 +75,48 @@ enum StagingPathValidation {
         if let existing = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             for item in existing {
                 try? fileManager.removeItem(at: item)
+            }
+        }
+    }
+
+    /// Requires the downloaded archive to be a real regular file at the expected contained
+    /// path before either digest computation or extraction can open it.
+    static func validateArchive(at archiveURL: URL, stagingDir: URL) throws -> URL {
+        var archiveStat = stat()
+        guard lstat(archiveURL.path, &archiveStat) == 0,
+              (archiveStat.st_mode & S_IFMT) == S_IFREG else {
+            throw StagingPathError.invalidArchive("not a regular file at \(archiveURL.path)")
+        }
+        do {
+            return try canonicalContainedURL(archiveURL, in: stagingDir)
+        } catch {
+            throw StagingPathError.invalidArchive("path escaped staging at \(archiveURL.path)")
+        }
+    }
+
+    /// Audits the entire extracted tree before bundle metadata or signatures are trusted.
+    /// In particular, archive-created symlinks may not resolve outside the staging directory.
+    static func validateExtractedTree(in stagingDir: URL) throws {
+        let fileManager = FileManager.default
+        let canonicalStaging = canonicalPath(stagingDir)
+        guard let enumerator = fileManager.enumerator(
+            at: stagingDir,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            throw StagingPathError.invalidStagingDirectory(
+                "could not enumerate extracted tree at \(stagingDir.path)"
+            )
+        }
+
+        for case let itemURL as URL in enumerator {
+            let destination = canonicalPath(itemURL)
+            guard destination == canonicalStaging
+                    || destination.hasPrefix(canonicalStaging + "/") else {
+                throw StagingPathError.internalSymlinkEscapes(
+                    path: itemURL.path,
+                    destination: destination
+                )
             }
         }
     }
@@ -110,6 +179,32 @@ enum StagingPathValidation {
         guard (executableStat.st_mode & 0o111) != 0 else {
             throw StagingPathError.invalidAppStructure("executable at \(executableURL.path) is not marked executable")
         }
+    }
+
+    private static func canonicalContainedURL(_ candidate: URL, in root: URL) throws -> URL {
+        let standardizedRoot = standardizedPath(root)
+        let standardizedCandidate = standardizedPath(candidate)
+        guard standardizedCandidate.hasPrefix(standardizedRoot + "/") else {
+            throw StagingPathError.stagingDirectoryEscaped(standardizedCandidate)
+        }
+
+        let relativePath = String(standardizedCandidate.dropFirst(standardizedRoot.count + 1))
+        let canonicalRoot = canonicalPath(root)
+        let expectedCanonical = (canonicalRoot as NSString)
+            .appendingPathComponent(relativePath)
+        let actualCanonical = canonicalPath(candidate)
+        guard actualCanonical == expectedCanonical else {
+            throw StagingPathError.stagingDirectoryEscaped(actualCanonical)
+        }
+        return URL(fileURLWithPath: actualCanonical)
+    }
+
+    private static func standardizedPath(_ url: URL) -> String {
+        (url.path as NSString).standardizingPath
+    }
+
+    private static func canonicalPath(_ url: URL) -> String {
+        (url.resolvingSymlinksInPath().path as NSString).standardizingPath
     }
 }
 
@@ -208,13 +303,11 @@ enum CodeSigningPolicy {
 
     static func verifyStrictCodeSignature(
         at appURL: URL,
-        processRunner: (String, [String], TimeInterval) -> ProcessResult = ProcessRunner.run
+        processRunner: (ProcessInvocation, TimeInterval) -> ProcessResult = {
+            ProcessRunner.run(invocation: $0, timeout: $1)
+        }
     ) throws {
-        let result = processRunner(
-            "/usr/bin/codesign",
-            ["--verify", "--deep", "--strict", appURL.path],
-            30.0
-        )
+        let result = UpdateToolCommand.verifyCodeSignature(bundle: appURL).run(using: processRunner)
         if result.timedOut {
             throw SigningTrustError.candidateSignatureInvalid("codesign verification timed out after 30 seconds")
         }
