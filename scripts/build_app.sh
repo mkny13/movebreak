@@ -29,6 +29,16 @@ echo "==> Checking repository agent context"
 echo "==> Checking architecture documentation"
 ./scripts/check_architecture_docs.sh
 
+echo "==> Checking security surface"
+./scripts/check_security_surface.sh --self-test
+
+# NUL-delimited tracked inputs only; the gates reject missing, untracked, symlinked,
+# or undocumented sources before this list reaches swiftc.
+SOURCES=()
+while IFS= read -r -d '' source; do
+    SOURCES+=("$source")
+done < <(git ls-files -z 'Sources/MoveBreak/*.swift')
+
 echo "==> Compiling"
 mkdir -p build
 swiftc -O \
@@ -39,7 +49,7 @@ swiftc -O \
     -framework CoreAudio \
     -framework Security \
     -o build/MoveBreak \
-    Sources/MoveBreak/*.swift
+    "${SOURCES[@]}"
 
 echo "==> Checking documentation links and CLI coverage"
 ./scripts/check_documentation.sh ./build/MoveBreak

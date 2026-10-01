@@ -59,6 +59,9 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
+      - name: Check security surface before signing secrets
+        run: ./scripts/check_security_surface.sh --self-test
+
       - name: Import signing identity and package app
         shell: bash
         env:
