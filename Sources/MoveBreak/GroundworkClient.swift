@@ -19,13 +19,21 @@ private struct GroundworkTaskCancellation: GroundworkRequestCancellation {
 
 final class GroundworkURLSessionTransport: NSObject, GroundworkTransport, URLSessionTaskDelegate {
     private lazy var session: URLSession = {
+        return URLSession(configuration: Self.configuration(), delegate: self, delegateQueue: nil)
+    }()
+
+    static func configuration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 30
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
-        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-    }()
+        return configuration
+    }
 
     @discardableResult
     func send(
@@ -50,8 +58,9 @@ final class GroundworkURLSessionTransport: NSObject, GroundworkTransport, URLSes
     static func redirectedRequest(from original: URLRequest?, proposed: URLRequest) -> URLRequest? {
         guard let originalURL = original?.url,
               let redirectedURL = proposed.url,
-              GroundworkOrigin(url: originalURL) == GroundworkOrigin(url: redirectedURL),
-              !(originalURL.scheme == "https" && redirectedURL.scheme != "https") else { return nil }
+              let origin = GroundworkOrigin(url: originalURL),
+              let destination = GroundworkOrigin(url: redirectedURL),
+              origin == destination else { return nil }
         return proposed
     }
 }
@@ -62,7 +71,15 @@ struct GroundworkOrigin: Codable, Equatable, Hashable {
     let port: Int
 
     init?(url: URL) {
-        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return nil }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              url.baseURL == nil, components.user == nil, components.password == nil,
+              components.fragment == nil,
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.percentEncodedHost?.contains("%") == false,
+              (1...65535).contains(components.port ?? (scheme == "https" ? 443 : 80)) else { return nil }
+        let loopback = ["localhost", "127.0.0.1", "[::1]", "::1"].contains(host)
+        guard scheme == "https" || (scheme == "http" && loopback) else { return nil }
         self.scheme = scheme
         self.host = host
         self.port = url.port ?? (scheme == "https" ? 443 : 80)
@@ -88,7 +105,7 @@ final class GroundworkClient {
     static let sessionPath = "api/integrations/movebreak/session"
 
     let baseURL: URL
-    let token: String
+    private let token: String
     let timeout: TimeInterval
     private let transport: GroundworkTransport
 
@@ -98,17 +115,21 @@ final class GroundworkClient {
         timeout: TimeInterval = 10,
         transport: GroundworkTransport = GroundworkURLSessionTransport()
     ) throws {
-        guard GroundworkSetup.validateBaseURL(baseURL) != nil else {
+        guard let baseURL = GroundworkSetup.validateBaseURL(baseURL) else {
             throw GroundworkClientError.invalidConfiguration("invalid Groundwork base URL")
         }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedToken.isEmpty else {
-            throw GroundworkClientError.invalidConfiguration("missing Groundwork token")
+        guard Self.validToken(trimmedToken) else {
+            throw GroundworkClientError.invalidConfiguration("invalid Groundwork token")
         }
         self.baseURL = baseURL
         self.token = trimmedToken
-        self.timeout = min(max(timeout, 1), 30)
+        self.timeout = timeout.isFinite ? min(max(timeout, 1), 30) : 10
         self.transport = transport
+    }
+
+    static func validToken(_ token: String) -> Bool {
+        !token.isEmpty && token.utf8.allSatisfy { (33...126).contains($0) }
     }
 
     static func configured(transport: GroundworkTransport = GroundworkURLSessionTransport()) throws -> GroundworkClient? {
@@ -137,7 +158,10 @@ final class GroundworkClient {
             completion(.failure(.invalidConfiguration("invalid routine URL")))
             return nil
         }
-        var request = authorizedRequest(url: url)
+        guard var request = authorizedRequest(url: url) else {
+            completion(.failure(.invalidConfiguration("invalid routine origin")))
+            return nil
+        }
         request.httpMethod = "GET"
         return transport.send(request) { data, response, error in
             completion(Self.decode(data: data, response: response, error: error, as: GroundworkRoutineResponse.self) { value in
@@ -158,7 +182,10 @@ final class GroundworkClient {
             completion(.failure(.malformedResponse))
             return nil
         }
-        var request = authorizedRequest(url: endpoint(Self.sessionPath))
+        guard var request = authorizedRequest(url: endpoint(Self.sessionPath)) else {
+            completion(.failure(.invalidConfiguration("invalid completion origin")))
+            return nil
+        }
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
@@ -181,7 +208,9 @@ final class GroundworkClient {
         baseURL.appendingPathComponent(path)
     }
 
-    private func authorizedRequest(url: URL) -> URLRequest {
+    private func authorizedRequest(url: URL) -> URLRequest? {
+        guard let origin = GroundworkOrigin(url: baseURL),
+              let destination = GroundworkOrigin(url: url), origin == destination else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
