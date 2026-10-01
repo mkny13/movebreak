@@ -22,6 +22,6 @@ groundwork_history = "The configured Groundwork origin owns remotely accepted Hi
 credentials = "Keychain service com.mike.MoveBreak.groundwork with an account derived from the exact scheme/host/port origin. Credentials are device-local, are never copied into backups or CI, and must be reconfigured for a replacement installation or origin."
 
 [canary]
-before_compile = "./scripts/build_app.sh first runs scripts/check_agent_context.sh and scripts/check_architecture_docs.sh; they reject a noncanonical CLAUDE.md, oversized/missing AGENTS.md, forbidden DESIGN.md, or a stale Swift module inventory before swiftc runs."
+before_compile = "./scripts/build_app.sh first runs scripts/check_security_surface.sh to validate helper hashes before executing scripts/check_agent_context.sh and scripts/check_architecture_docs.sh; they reject a noncanonical CLAUDE.md, oversized/missing AGENTS.md, forbidden DESIGN.md, or a stale Swift module inventory before swiftc runs."
 after_compile = "The same build checks documentation links and CLI coverage, then runs the complete ./build/MoveBreak --self-test suite before assembly and signing. Any check failure aborts the build."
 wrong_checkout = "The canonical agent-context check and tracked-source architecture inventory are checkout-relative, so a deliberately broken AGENTS.md or ARCHITECTURE.md fixture must fail instead of silently validating another checkout."

@@ -23,11 +23,21 @@ IDENTITY="${1:--}"
 APP="MoveBreak.app"
 DEPLOY_TARGET="arm64-apple-macosx14.4"
 
+echo "==> Checking security surface"
+./scripts/check_security_surface.sh --self-test
+
 echo "==> Checking repository agent context"
 ./scripts/check_agent_context.sh
 
 echo "==> Checking architecture documentation"
 ./scripts/check_architecture_docs.sh
+
+# NUL-delimited tracked inputs only; the gates reject missing, untracked, symlinked,
+# or undocumented sources before this list reaches swiftc.
+SOURCES=()
+while IFS= read -r -d '' source; do
+    SOURCES+=("$source")
+done < <(git ls-files -z 'Sources/MoveBreak/*.swift')
 
 echo "==> Compiling"
 mkdir -p build
@@ -39,7 +49,7 @@ swiftc -O \
     -framework CoreAudio \
     -framework Security \
     -o build/MoveBreak \
-    Sources/MoveBreak/*.swift
+    "${SOURCES[@]}"
 
 echo "==> Checking documentation links and CLI coverage"
 ./scripts/check_documentation.sh ./build/MoveBreak

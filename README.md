@@ -428,9 +428,18 @@ Use this only as a diagnostic one-shot check; it does not bypass any trust rule:
 
 ## Build and test details
 
-`./scripts/build_app.sh` compiles `Sources/MoveBreak/*.swift` directly with `swiftc`, links
+`./scripts/build_app.sh` first runs the offline security-surface gate and its negative
+fixtures, then compiles only tracked, architecture-inventoried Swift sources with `swiftc`, links
 only macOS system frameworks, runs `./build/MoveBreak --self-test`, assembles the app, and
 signs it. Build products are written to the ignored `build/` and `MoveBreak.app/` paths.
+
+Run `./scripts/check_security_surface.sh` for the gate alone or add `--self-test` to
+exercise its isolated negative fixtures. Dependency metadata, vendor directories, unexpected
+Swift inputs, and changes to reviewed Actions, permissions, secret scope, scripts, imports,
+or executable primitives fail verification. The gate uses Python 3 from the existing macOS
+CommandLineTools build environment; it installs nothing and makes no network requests.
+See [the security allowlist process](ARCHITECTURE.md#security-surface-review-gate) before
+intentionally changing that surface.
 
 For an opt-in repeat-run health check against an already-built executable:
 

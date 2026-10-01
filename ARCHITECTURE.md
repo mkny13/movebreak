@@ -201,9 +201,53 @@ nonblocking drain and sends a final SIGKILL if the direct child remains live, so
 cannot turn process completion into an unbounded EOF wait and no asynchronous pipe callback can
 outlive the returned result.
 
+## Security-surface review gate
+
+`scripts/check_security_surface.sh` is an offline, standard-library-only Python 3 gate
+invoked through Bash before any other build helper or compilation, so changed helper
+hashes are rejected before those scripts can execute. The build runs its `--self-test`
+fixtures as well.
+It checks the working tree, including ignored/untracked inputs, excluding only `.git` and
+the generated root `build/` and `MoveBreak.app/` trees. Symlinks, unexpected Swift inputs,
+package manifests/lockfiles, environment files, vendored roots, and additional executable
+scripts/libraries fail closed. The architecture module inventory remains the ownership
+source of truth; the compiler receives a NUL-delimited Git-tracked array, never a shell glob.
+
+The approved runtime imports are Apple's AppKit, SwiftUI, Foundation, CoreAudio, Security,
+CryptoKit, and Darwin. Build/release tooling consists of macOS/CommandLineTools Bash,
+Python 3 (standard library), Git, swiftc, xcrun, and the fixed system utilities present in
+the reviewed scripts/workflow (including codesign, plutil, security, ditto, and xcode-select).
+Runtime updater subprocesses remain the fixed `/usr/bin/ditto`, `/usr/bin/codesign`, and
+`/usr/bin/xattr` invocations described above; browser inspection uses reviewed AppleScript.
+No package manager, downloaded installer, third-party runtime, or environment-file loader
+is approved.
+
+`APPROVED` stores SHA-256 digests of the complete scripts and workflow, so new commands,
+indirect download/execute sequences, alternate workflows, permission changes, or secret
+references cannot slip through a partial shell/YAML parser. The workflow's reviewed Actions
+are full commit SHA pins with human-readable version comments. Verification is read-only
+and secret-free. Only the tag-gated release job has `contents: write`; strict numeric tag
+validation and a security check precede the step-scoped signing secrets. The certificate
+and password are unset before building, and the ephemeral keychain is cleaned up on exit.
+`FRAMEWORKS` and `SWIFT_PRIMITIVES` separately constrain runtime imports and reviewed
+process/AppleScript primitive lines, including their ordering and multiplicity.
+
+For an intentional surface change, review the entire changed script/workflow and any new
+Action commit, confirm tag validation precedes secret access and verification stays read-only,
+and document the new dependency/tool or trust boundary here in the same change. Then edit
+the gate's explicit allowlists: compute file digests with `shasum -a 256 PATH`, update only
+the reviewed entries in `APPROVED`, and update runtime import/primitive entries if needed.
+New dependency types also require a deliberate policy change to the rejection rules. There
+is no automatic baseline regeneration or bypass switch. Run the gate, `--self-test`, and
+the complete build before committing. Even cosmetic script/workflow edits require a digest
+update; this conservative tradeoff keeps the small executable configuration reviewable.
+The gate is a drift detector, not a proof against malicious Swift obfuscation or a reviewer
+who approves an unsafe allowlist change. Its own implementation and allowlist require code
+review like the build entrypoint itself.
+
 ## Build and test structure
 
-`scripts/build_app.sh` compiles every source file directly with `swiftc`, targeting arm64
+`scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
 macOS 14.4 and linking only system frameworks. It runs the CLI self-test before assembling
 and ad-hoc signing the application bundle. The self-test coordinator checks its suite
 manifest and runs focused detection, persistence, credential/security, and updater suites
