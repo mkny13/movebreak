@@ -98,6 +98,36 @@ enum UpdateSelfTests {
             detail: "stdout=\(noisy.stdout.utf8.count) bytes stderr=\(noisy.stderr.utf8.count) bytes"
         )
 
+        let boundedRunner = ProcessRunner(
+            terminationGracePeriod: 0.15,
+            forceKillGracePeriod: 0.5,
+            maximumWaitInterval: 0.02,
+            maximumOutputBytesPerStream: 1_024
+        )
+        let bounded = boundedRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", noisyCommand],
+            timeout: 5
+        )
+        reporter.check(
+            "high-volume output is drained while retained stdout and stderr stay bounded",
+            bounded.isSuccess
+                && bounded.stdout.utf8.count == 1_024
+                && bounded.stderr.utf8.count == 1_024
+                && bounded.stdoutTruncated
+                && bounded.stderrTruncated,
+            detail: "stdout=\(bounded.stdout.utf8.count) bytes stderr=\(bounded.stderr.utf8.count) bytes"
+        )
+
+        let isolatedEnvironment = runner.run(
+            invocation: ProcessInvocation(executable: "/usr/bin/env", arguments: []),
+            timeout: 2
+        )
+        reporter.check(
+            "process runner uses the invocation's explicit empty environment",
+            isolatedEnvironment.isSuccess && isolatedEnvironment.stdout.isEmpty
+        )
+
         // The background sleep inherits both pipe writers after its direct shell
         // parent exits. Completion must follow the direct child, not descendant EOF.
         let inheritedWriterStart = ProcessInfo.processInfo.systemUptime

@@ -9,8 +9,40 @@ struct ProcessResult {
     let timedOut: Bool
     let stdout: String
     let stderr: String
+    let stdoutTruncated: Bool
+    let stderrTruncated: Bool
+
+    init(
+        exitCode: Int32,
+        timedOut: Bool,
+        stdout: String,
+        stderr: String,
+        stdoutTruncated: Bool = false,
+        stderrTruncated: Bool = false
+    ) {
+        self.exitCode = exitCode
+        self.timedOut = timedOut
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdoutTruncated = stdoutTruncated
+        self.stderrTruncated = stderrTruncated
+    }
 
     var isSuccess: Bool { !timedOut && exitCode == 0 }
+}
+
+/// A fully specified direct-process launch. Callers cannot implicitly inherit environment
+/// variables that change a system tool's behavior.
+struct ProcessInvocation: Equatable {
+    let executable: String
+    let arguments: [String]
+    let environment: [String: String]
+
+    init(executable: String, arguments: [String], environment: [String: String] = [:]) {
+        self.executable = executable
+        self.arguments = arguments
+        self.environment = environment
+    }
 }
 
 /// Runs a child process while continuously draining both output pipes.
@@ -24,15 +56,18 @@ struct ProcessRunner {
     let terminationGracePeriod: TimeInterval
     let forceKillGracePeriod: TimeInterval
     let maximumWaitInterval: TimeInterval
+    let maximumOutputBytesPerStream: Int
 
     init(
         terminationGracePeriod: TimeInterval = 2.0,
         forceKillGracePeriod: TimeInterval = 1.0,
-        maximumWaitInterval: TimeInterval = 0.05
+        maximumWaitInterval: TimeInterval = 0.05,
+        maximumOutputBytesPerStream: Int = 1_048_576
     ) {
         self.terminationGracePeriod = max(0, terminationGracePeriod)
         self.forceKillGracePeriod = max(0, forceKillGracePeriod)
         self.maximumWaitInterval = max(0.001, maximumWaitInterval)
+        self.maximumOutputBytesPerStream = max(0, maximumOutputBytesPerStream)
     }
 
     static func run(
@@ -43,14 +78,32 @@ struct ProcessRunner {
         shared.run(executable: executable, arguments: arguments, timeout: timeout)
     }
 
+    static func run(
+        invocation: ProcessInvocation,
+        timeout: TimeInterval = 30.0
+    ) -> ProcessResult {
+        shared.run(invocation: invocation, timeout: timeout)
+    }
+
     func run(
         executable: String,
         arguments: [String],
         timeout: TimeInterval
     ) -> ProcessResult {
+        run(
+            invocation: ProcessInvocation(executable: executable, arguments: arguments),
+            timeout: timeout
+        )
+    }
+
+    func run(
+        invocation: ProcessInvocation,
+        timeout: TimeInterval
+    ) -> ProcessResult {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
+        process.executableURL = URL(fileURLWithPath: invocation.executable)
+        process.arguments = invocation.arguments
+        process.environment = invocation.environment
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -63,6 +116,9 @@ struct ProcessRunner {
 
         // This is the single ownership cleanup path, including Process.run() failure.
         defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
             try? stdoutRead.close()
             try? stdoutWrite.close()
             try? stderrRead.close()
@@ -89,6 +145,8 @@ struct ProcessRunner {
 
         var stdoutData = Data()
         var stderrData = Data()
+        var stdoutTruncated = false
+        var stderrTruncated = false
         let startedAt = ProcessInfo.processInfo.systemUptime
         let timeoutDeadline = startedAt + max(0, timeout)
         var terminationDeadline: TimeInterval?
@@ -155,23 +213,35 @@ struct ProcessRunner {
             if drainStdoutFirst {
                 if stdoutReady {
                     stdoutOpen = Self.drainAvailable(
-                        from: stdoutRead.fileDescriptor, into: &stdoutData
+                        from: stdoutRead.fileDescriptor,
+                        into: &stdoutData,
+                        truncated: &stdoutTruncated,
+                        maximumRetainedBytes: maximumOutputBytesPerStream
                     )
                 }
                 if stderrReady {
                     stderrOpen = Self.drainAvailable(
-                        from: stderrRead.fileDescriptor, into: &stderrData
+                        from: stderrRead.fileDescriptor,
+                        into: &stderrData,
+                        truncated: &stderrTruncated,
+                        maximumRetainedBytes: maximumOutputBytesPerStream
                     )
                 }
             } else {
                 if stderrReady {
                     stderrOpen = Self.drainAvailable(
-                        from: stderrRead.fileDescriptor, into: &stderrData
+                        from: stderrRead.fileDescriptor,
+                        into: &stderrData,
+                        truncated: &stderrTruncated,
+                        maximumRetainedBytes: maximumOutputBytesPerStream
                     )
                 }
                 if stdoutReady {
                     stdoutOpen = Self.drainAvailable(
-                        from: stdoutRead.fileDescriptor, into: &stdoutData
+                        from: stdoutRead.fileDescriptor,
+                        into: &stdoutData,
+                        truncated: &stdoutTruncated,
+                        maximumRetainedBytes: maximumOutputBytesPerStream
                     )
                 }
             }
@@ -181,10 +251,18 @@ struct ProcessRunner {
         // Drain everything already written after observing exit. Reads remain
         // nonblocking, so an inherited writer in an errant descendant cannot hang us.
         _ = Self.drainAvailable(
-            from: stdoutRead.fileDescriptor, into: &stdoutData, chunkLimit: .max
+            from: stdoutRead.fileDescriptor,
+            into: &stdoutData,
+            truncated: &stdoutTruncated,
+            maximumRetainedBytes: maximumOutputBytesPerStream,
+            chunkLimit: .max
         )
         _ = Self.drainAvailable(
-            from: stderrRead.fileDescriptor, into: &stderrData, chunkLimit: .max
+            from: stderrRead.fileDescriptor,
+            into: &stderrData,
+            truncated: &stderrTruncated,
+            maximumRetainedBytes: maximumOutputBytesPerStream,
+            chunkLimit: .max
         )
 
         let exitCode: Int32
@@ -199,8 +277,10 @@ struct ProcessRunner {
         return ProcessResult(
             exitCode: exitCode,
             timedOut: timedOut,
-            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-            stderr: String(data: stderrData, encoding: .utf8) ?? ""
+            stdout: String(decoding: stdoutData, as: UTF8.self),
+            stderr: String(decoding: stderrData, as: UTF8.self),
+            stdoutTruncated: stdoutTruncated,
+            stderrTruncated: stderrTruncated
         )
     }
 
@@ -257,6 +337,8 @@ struct ProcessRunner {
     private static func drainAvailable(
         from descriptor: Int32,
         into data: inout Data,
+        truncated: inout Bool,
+        maximumRetainedBytes: Int,
         chunkLimit: Int = 64
     ) -> Bool {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
@@ -265,7 +347,14 @@ struct ProcessRunner {
         while chunksRead < chunkLimit {
             let count = Darwin.read(descriptor, &buffer, buffer.count)
             if count > 0 {
-                data.append(buffer, count: count)
+                let available = max(0, maximumRetainedBytes - data.count)
+                let retainedCount = min(count, available)
+                if retainedCount > 0 {
+                    data.append(contentsOf: buffer.prefix(retainedCount))
+                }
+                if retainedCount < count {
+                    truncated = true
+                }
                 chunksRead += 1
                 continue
             }
