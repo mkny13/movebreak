@@ -175,26 +175,31 @@ applies the same gate. Before staging a candidate it requires all of the followi
 - a newer, well-formed release tag and exactly named `MoveBreak.app.zip` asset;
 - an HTTPS GitHub release URL for the expected repository, tag, and asset;
 - a release-provided SHA-256 digest matching the downloaded archive;
-- extraction inside a mode-`0700`, random application-support staging directory, with the
-  bundle and all symlinks contained there;
+- extraction inside a canonical, mode-`0700`, random application-support staging directory,
+  with the regular archive path, extracted tree, bundle, and all symlinks contained there;
 - matching bundle identifier, executable shape, and release/bundle version;
 - strict code-signature verification and the same leaf signing certificate as the running
   app.
 
-Fixed absolute executables and argument arrays are used for archive, signature, and xattr
-operations; no shell evaluates downloaded input. Quarantine is removed only after all checks
-pass. The updater removes abandoned staging directories at the next staging attempt.
+The production subprocess surface is a closed command set containing only `/usr/bin/ditto`,
+`/usr/bin/codesign`, and `/usr/bin/xattr`. Each command uses a fixed absolute executable, an
+explicit argument array with option parsing terminated before paths, and an empty environment;
+no shell or PATH lookup evaluates downloaded input. Quarantine is removed without following
+symlinks and only after all checks pass. The updater removes abandoned staging directories at
+the next staging attempt.
 Replacement targets the running bundle's actual location and relaunches only when detection
 is unpaused and idle and no prompt, routine, or editor panel is visible. A validation failure
 leaves the installed bundle untouched. A reported replacement failure does not relaunch and
 is retried from the staged candidate at a later safe moment.
 
-Subprocess stdout and stderr use synchronously owned, nonblocking pipes. The runner waits with
+Subprocess stdout and stderr use synchronously owned, nonblocking pipes and retain at most 1 MiB
+per stream while continuing to drain excess output. The runner waits with
 `poll(2)` for pipe readiness or the next timeout, SIGTERM, or SIGKILL deadline, alternating the
 first stream drained on each wake to avoid starvation. A short maximum wait also rechecks direct
 child exit when a descendant incorrectly inherits a pipe writer. Cleanup performs a final
-unlimited nonblocking drain, so inherited writers cannot turn process completion into an
-unbounded EOF wait and no asynchronous pipe callback can outlive the returned result.
+nonblocking drain and sends a final SIGKILL if the direct child remains live, so inherited writers
+cannot turn process completion into an unbounded EOF wait and no asynchronous pipe callback can
+outlive the returned result.
 
 ## Build and test structure
 

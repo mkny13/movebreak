@@ -98,6 +98,36 @@ enum UpdateSelfTests {
             detail: "stdout=\(noisy.stdout.utf8.count) bytes stderr=\(noisy.stderr.utf8.count) bytes"
         )
 
+        let boundedRunner = ProcessRunner(
+            terminationGracePeriod: 0.15,
+            forceKillGracePeriod: 0.5,
+            maximumWaitInterval: 0.02,
+            maximumOutputBytesPerStream: 1_024
+        )
+        let bounded = boundedRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", noisyCommand],
+            timeout: 5
+        )
+        reporter.check(
+            "high-volume output is drained while retained stdout and stderr stay bounded",
+            bounded.isSuccess
+                && bounded.stdout.utf8.count == 1_024
+                && bounded.stderr.utf8.count == 1_024
+                && bounded.stdoutTruncated
+                && bounded.stderrTruncated,
+            detail: "stdout=\(bounded.stdout.utf8.count) bytes stderr=\(bounded.stderr.utf8.count) bytes"
+        )
+
+        let isolatedEnvironment = runner.run(
+            invocation: ProcessInvocation(executable: "/usr/bin/env", arguments: []),
+            timeout: 2
+        )
+        reporter.check(
+            "process runner uses the invocation's explicit empty environment",
+            isolatedEnvironment.isSuccess && isolatedEnvironment.stdout.isEmpty
+        )
+
         // The background sleep inherits both pipe writers after its direct shell
         // parent exits. Completion must follow the direct child, not descendant EOF.
         let inheritedWriterStart = ProcessInfo.processInfo.systemUptime
@@ -591,7 +621,71 @@ enum UpdateSelfTests {
             reporter.check("computeSHA256 succeeded", passed: false)
         }
 
-        // 6. Staging Directory Permissions (0700)
+        let canonicalArchive = try? StagingPathValidation.validateArchive(
+            at: sampleArchiveURL,
+            stagingDir: tempFixtureDir
+        )
+        reporter.check(
+            "regular archive path is canonical and contained before digest or extraction",
+            canonicalArchive?.path == sampleArchiveURL.resolvingSymlinksInPath().path
+        )
+        let symlinkArchiveURL = tempFixtureDir.appendingPathComponent("symlink-archive.zip")
+        _ = fixtureStep("archive symlink fixture is created") {
+            try FileManager.default.createSymbolicLink(
+                at: symlinkArchiveURL,
+                withDestinationURL: URL(fileURLWithPath: "/etc/passwd")
+            )
+        }
+        var symlinkArchiveThrew = false
+        do {
+            _ = try StagingPathValidation.validateArchive(
+                at: symlinkArchiveURL,
+                stagingDir: tempFixtureDir
+            )
+        } catch let error as StagingPathError {
+            if case .invalidArchive = error { symlinkArchiveThrew = true }
+        } catch {}
+        reporter.check("symlinked archive is rejected before digest or extraction", passed: symlinkArchiveThrew)
+
+        // 6. Closed System-Tool Invocation Surface
+        let hostileArchiveURL = tempFixtureDir.appendingPathComponent("-archive;$(touch injected).zip")
+        let hostileStagingURL = tempFixtureDir.appendingPathComponent("-staging && open attacker")
+        let hostileBundleURL = hostileStagingURL.appendingPathComponent("-MoveBreak.app")
+        let extractionInvocation = UpdateToolCommand.extractArchive(
+            archive: hostileArchiveURL,
+            destination: hostileStagingURL
+        ).invocation
+        let signatureInvocation = UpdateToolCommand.verifyCodeSignature(
+            bundle: hostileBundleURL
+        ).invocation
+        let quarantineInvocation = UpdateToolCommand.removeQuarantine(
+            bundle: hostileBundleURL
+        ).invocation
+        reporter.check(
+            "updater command surface is limited to reviewed absolute system tools and empty environments",
+            [extractionInvocation.executable, signatureInvocation.executable, quarantineInvocation.executable]
+                == ["/usr/bin/ditto", "/usr/bin/codesign", "/usr/bin/xattr"]
+                && extractionInvocation.environment.isEmpty
+                && signatureInvocation.environment.isEmpty
+                && quarantineInvocation.environment.isEmpty
+        )
+        reporter.check(
+            "archive paths remain data after ditto option parsing is terminated",
+            extractionInvocation.arguments
+                == ["-x", "-k", "--", hostileArchiveURL.path, hostileStagingURL.path]
+        )
+        reporter.check(
+            "bundle path remains data after codesign option parsing is terminated",
+            signatureInvocation.arguments
+                == ["--verify", "--deep", "--strict", "--", hostileBundleURL.path]
+        )
+        reporter.check(
+            "bundle path remains data and symlinks are not followed during quarantine removal",
+            quarantineInvocation.arguments
+                == ["-d", "-r", "-s", "com.apple.quarantine", "--", hostileBundleURL.path]
+        )
+
+        // 7. Staging Directory Permissions (0700)
         let stagingDir = tempFixtureDir.appendingPathComponent("staging", isDirectory: true)
         do {
             try StagingPathValidation.ensureSecureDirectory(at: stagingDir)
@@ -601,7 +695,27 @@ enum UpdateSelfTests {
             reporter.check("ensureSecureDirectory threw", passed: false, detail: "\(error)")
         }
 
-        // 7. Staging Containment & Symlink Defense
+        let pathRoot = tempFixtureDir.appendingPathComponent("path-root", isDirectory: true)
+        let pathOutside = tempFixtureDir.appendingPathComponent("path-outside", isDirectory: true)
+        let pathOutsideChild = pathOutside.appendingPathComponent("child", isDirectory: true)
+        let linkedDirectory = pathRoot.appendingPathComponent("linked", isDirectory: true)
+        _ = fixtureStep("staging path-component fixtures are created") {
+            try FileManager.default.createDirectory(at: pathRoot, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: pathOutsideChild, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: linkedDirectory, withDestinationURL: pathOutside)
+        }
+        var linkedComponentThrew = false
+        do {
+            _ = try StagingPathValidation.prepareSecureDirectory(
+                at: linkedDirectory.appendingPathComponent("child", isDirectory: true),
+                containedIn: pathRoot
+            )
+        } catch let error as StagingPathError {
+            if case .stagingDirectoryEscaped = error { linkedComponentThrew = true }
+        } catch {}
+        reporter.check("symlinked staging path component escaping its root is rejected", passed: linkedComponentThrew)
+
+        // 8. Staging Containment & Symlink Defense
         let appBundleDir = stagingDir.appendingPathComponent("MoveBreak.app", isDirectory: true)
         let macosDir = appBundleDir.appendingPathComponent("Contents/MacOS", isDirectory: true)
         _ = fixtureStep("sample app executable directory is created") {
@@ -647,6 +761,13 @@ enum UpdateSelfTests {
             if case .internalSymlinkEscapes = err { internalSymlinkThrew = true }
         } catch {}
         reporter.check("bundle with internal symlink escaping staging directory rejected", passed: internalSymlinkThrew)
+        var extractedTreeThrew = false
+        do {
+            try StagingPathValidation.validateExtractedTree(in: stagingDir)
+        } catch let err as StagingPathError {
+            if case .internalSymlinkEscapes = err { extractedTreeThrew = true }
+        } catch {}
+        reporter.check("archive-created symlink escaping staging rejected before bundle trust", passed: extractedTreeThrew)
         _ = fixtureStep("internal escaping symlink fixture is removed") {
             try FileManager.default.removeItem(at: escapeSymlink)
         }
@@ -691,7 +812,7 @@ enum UpdateSelfTests {
             )
         )
 
-        // 8. Bundle Metadata & Version Verification
+        // 9. Bundle Metadata & Version Verification
         let plistURL = appBundleDir.appendingPathComponent("Contents/Info.plist")
         func writePlist(bundleID: String, executable: String, version: String) throws {
             let dict: [String: Any] = [
@@ -782,7 +903,7 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("mismatched bundle version against release tag rejected", passed: versionMismatchThrew)
 
-        // 9. Code Signing Policy & Leaf Certificate Verification
+        // 10. Code Signing Policy & Leaf Certificate Verification
         let certBytesA = Data([0x30, 0x82, 0x01, 0x0A, 0x02, 0x01, 0x01])
         let certBytesB = Data([0x30, 0x82, 0x01, 0x0A, 0x02, 0x01, 0x02])
 
@@ -848,12 +969,12 @@ enum UpdateSelfTests {
         } catch {}
         reporter.check("ad-hoc running app disables automatic updates and fails closed", passed: adhocRunningThrew)
 
-        // 10. Strict Code Signature Verification on Real Bundles
-        var strictInvocation: (String, [String], TimeInterval)?
+        // 11. Strict Code Signature Verification on Real Bundles
+        var strictInvocation: (ProcessInvocation, TimeInterval)?
         var invalidSignatureThrew = false
         do {
-            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { executable, arguments, timeout in
-                strictInvocation = (executable, arguments, timeout)
+            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { invocation, timeout in
+                strictInvocation = (invocation, timeout)
                 return ProcessResult(exitCode: 1, timedOut: false, stdout: "", stderr: "invalid signature")
             }
         } catch let error as SigningTrustError {
@@ -864,14 +985,15 @@ enum UpdateSelfTests {
         reporter.check(
             "strict code-signature failure rejects candidate",
             passed: invalidSignatureThrew
-                && strictInvocation?.0 == "/usr/bin/codesign"
-                && strictInvocation?.1 == ["--verify", "--deep", "--strict", appBundleDir.path]
-                && strictInvocation?.2 == 30.0
+                && strictInvocation?.0.executable == "/usr/bin/codesign"
+                && strictInvocation?.0.arguments == ["--verify", "--deep", "--strict", "--", appBundleDir.path]
+                && strictInvocation?.0.environment.isEmpty == true
+                && strictInvocation?.1 == 30.0
         )
 
         var signatureTimeoutThrew = false
         do {
-            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { _, _, _ in
+            try CodeSigningPolicy.verifyStrictCodeSignature(at: appBundleDir) { _, _ in
                 ProcessResult(exitCode: ProcessResult.unavailableExitCode, timedOut: true, stdout: "", stderr: "")
             }
         } catch let error as SigningTrustError {

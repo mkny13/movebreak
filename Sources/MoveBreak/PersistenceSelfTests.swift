@@ -337,11 +337,27 @@ enum PersistenceSelfTests {
         let logger = SessionLogger(supportDir: fixture.url, currentOrigin: { originA })
         reporter.check("Disk fixture becomes read-only", chmod(fixture.url.path, 0o500) == 0)
         let result = LockedBox<Result<SessionRecord, Error>?>(nil)
-        logger.logCompletion(completion: completion()) { result.value = $0 }
+        var diagnostic = ""
+        do {
+            let captured = try SelfTestSupport.captureOutput {
+                logger.logCompletion(completion: completion()) { result.value = $0 }
+                _ = eventually {
+                    if case .failure? = result.value { return true }
+                    return false
+                }
+            }
+            diagnostic = captured.stderr
+        } catch {
+            reporter.check("Disk failure diagnostic is captured", false, detail: "\(error)")
+        }
         reporter.check("Disk failure is surfaced instead of acknowledging Done", eventually {
             if case .failure? = result.value { return true }
             return false
         })
+        reporter.check(
+            "Disk failure emits an observable persistence diagnostic",
+            diagnostic.contains("SessionLogger persistence failure: Failed to write session data")
+        )
         reporter.check("Disk failure performs no network work",
             !FileManager.default.fileExists(atPath: logger.logFile.path))
         _ = chmod(fixture.url.path, 0o700)
