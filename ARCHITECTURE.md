@@ -135,13 +135,25 @@ development), an existing location ID, and a 1–30 minute default. It commits n
 to preferences only after writing the token to the separate
 `com.mike.MoveBreak.groundwork` Keychain service, under an account derived from the exact
 scheme/host/port origin. A newly selected origin therefore cannot retrieve another origin's
-token.
+token. Tokens enter through echo-disabled terminal input, remain in device-only Keychain storage
+and private client memory, and are attached only as an Authorization header. Setup never
+reflects backend error text. No environment, process argument, or UserDefaults token path exists.
+Base URLs reject user information, encoded or non-root paths, queries, fragments, encoded
+hosts, and invalid ports. HTTP is limited to exact localhost, 127.0.0.1, or IPv6 loopback;
+the client uses the validated canonical root.
 
 The Groundwork client has injectable asynchronous transport, a bounded request timeout,
 cancellation, typed authentication/retryable/permanent failures, strict version-1 model
 validation, and GET/POST request construction. Its URLSession redirect delegate allows only
 same-origin redirects and rejects cross-origin or HTTPS-to-HTTP redirects before credentials
-can be forwarded. Successful nonempty routines can be atomically cached under
+can be forwarded. Both origins must validate and match scheme, lowercase host, and effective
+port; redirect user information and fragments fail closed. Endpoint origins are checked before
+authorization. The ephemeral session disables cookie storage, automatic cookies, URL caches,
+and ambient credential storage. Request and total resource timeouts are capped at 30 seconds,
+including non-finite timeout inputs, and cancellation reaches the underlying task. Response
+bodies and arbitrary transport errors are never reflected into typed failures or diagnostics.
+Offline tests use fake Keychain and transport backends, sentinel secrets, and the production
+session configuration without accessing live credentials or Groundwork. Successful nonempty routines can be atomically cached under
 `~/Library/Application Support/MoveBreak/GroundworkRoutineCache/`, keyed by schema, origin,
 location, and duration. Offline cache labels include their timestamp and explicitly say they
 were not revalidated; corrupt, absent, auth-failed, malformed, unavailable, live-empty, and
