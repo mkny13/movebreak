@@ -63,30 +63,10 @@ final class SessionLogger {
     }
 
     func ensureSupportDirectoryAndPermissions() {
-        if !fileManager.fileExists(atPath: supportDir.path) {
-            try? fileManager.createDirectory(
-                at: supportDir,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: Self.directoryPermissions]
-            )
-        } else {
-            try? fileManager.setAttributes(
-                [.posixPermissions: Self.directoryPermissions],
-                ofItemAtPath: supportDir.path
-            )
-        }
-        if let contents = try? fileManager.contentsOfDirectory(
-            at: supportDir,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        ) {
-            for item in contents {
-                let isDirectory = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                try? fileManager.setAttributes(
-                    [.posixPermissions: isDirectory ? Self.directoryPermissions : Self.filePermissions],
-                    ofItemAtPath: item.path
-                )
-            }
-        }
+        do {
+            let store = try PrivateFileStore(directoryURL: supportDir)
+            _ = try store.read(logFile.lastPathComponent)
+        } catch { report("startup protection", error: error) }
     }
 
     /// Compatibility entry point for local-only callers. New HUD completions use the structured
@@ -159,35 +139,20 @@ final class SessionLogger {
         var data = line
         data.append(UInt8(ascii: "\n"))
 
-        if fileManager.fileExists(atPath: target.path) {
-            try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: target.path)
-            do {
-                let handle = try FileHandle(forWritingTo: target)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.synchronize()
-            } catch { throw SessionLoggerError.writeFailed("Append failed: \(error.localizedDescription)") }
-        } else {
-            guard fileManager.createFile(
-                atPath: target.path,
-                contents: data,
-                attributes: [.posixPermissions: Self.filePermissions]
-            ) else { throw SessionLoggerError.writeFailed("Failed to create history file") }
-            do {
-                let handle = try FileHandle(forWritingTo: target)
-                defer { try? handle.close() }
-                try handle.synchronize()
-            } catch { throw SessionLoggerError.writeFailed("Sync failed: \(error.localizedDescription)") }
+        guard target.deletingLastPathComponent().standardizedFileURL == supportDir.standardizedFileURL else {
+            throw SessionLoggerError.writeFailed("History target is outside application support")
         }
+        do {
+            try PrivateFileStore(directoryURL: supportDir).append(data, to: target.lastPathComponent)
+        } catch { throw SessionLoggerError.writeFailed(error.localizedDescription) }
     }
 
     func readHistory() throws -> [SessionRecord] {
-        guard fileManager.fileExists(atPath: logFile.path) else { return [] }
         let data: Data
-        do { data = try Data(contentsOf: logFile) }
-        catch { throw SessionLoggerError.readFailed(error.localizedDescription) }
-        try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: logFile.path)
+        do {
+            guard let stored = try PrivateFileStore(directoryURL: supportDir).read(logFile.lastPathComponent) else { return [] }
+            data = stored
+        } catch { throw SessionLoggerError.readFailed(error.localizedDescription) }
         var records: [SessionRecord] = []
         for line in data.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
             do { records.append(try decoder.decode(SessionRecord.self, from: Data(line))) }

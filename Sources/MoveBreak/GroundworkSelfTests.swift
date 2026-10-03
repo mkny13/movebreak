@@ -401,8 +401,33 @@ enum GroundworkSelfTests {
             } else { reporter.check("authentication failure remains distinct from outage fallback", false) }
 
             if let file = try FileManager.default.contentsOfDirectory(at: cacheURL, includingPropertiesForKeys: nil).first {
+                _ = chmod(file.path, 0o644)
+                _ = chmod(cacheURL.path, 0o755)
+                _ = restarted.load(origin: origin, locationID: "office", durationMinutes: 5)
+                reporter.check("Cache reads tighten existing directory and file modes",
+                    SelfTestSupport.posixMode(at: file.path) == 0o600
+                    && SelfTestSupport.posixMode(at: cacheURL.path) == 0o700)
+                try restarted.store(generated, origin: origin, locationID: "office", durationMinutes: 5)
+                reporter.check("Cache atomic update retains private file mode", SelfTestSupport.posixMode(at: file.path) == 0o600)
                 try Data("corrupt".utf8).write(to: file)
                 reporter.check("corrupt cache is reported separately", restarted.load(origin: origin, locationID: "office", durationMinutes: 5) == .corrupt)
+                do {
+                    try restarted.store(generated, origin: origin, locationID: "office", durationMinutes: 5)
+                    reporter.check("Corrupt cache cannot be overwritten", false)
+                } catch {
+                    reporter.check("Corrupt cache preserved on store failure", try Data(contentsOf: file) == Data("corrupt".utf8))
+                }
+                try FileManager.default.removeItem(at: file)
+                let sentinel = fixture.url.appendingPathComponent("sentinel")
+                try Data("sentinel".utf8).write(to: sentinel)
+                try FileManager.default.createSymbolicLink(at: file, withDestinationURL: sentinel)
+                reporter.check("Cache load rejects symlink", restarted.load(origin: origin, locationID: "office", durationMinutes: 5) == .corrupt)
+                do {
+                    try restarted.store(generated, origin: origin, locationID: "office", durationMinutes: 5)
+                    reporter.check("Cache store rejects symlink", false)
+                } catch {
+                    reporter.check("Cache symlink destination preserved", try Data(contentsOf: sentinel) == Data("sentinel".utf8))
+                }
             } else { reporter.check("cache file exists", false) }
 
             let local: [Routine] = []
