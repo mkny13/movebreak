@@ -204,43 +204,25 @@ final class GroundworkOutbox {
     }
 
     func readDocument() throws -> GroundworkOutboxDocument {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            return GroundworkOutboxDocument(schemaVersion: Self.schemaVersion, items: [], delivered: [])
-        }
         let data: Data
-        do { data = try Data(contentsOf: fileURL) } catch { throw GroundworkOutboxError.readFailed }
+        do {
+            guard let stored = try PrivateFileStore(directoryURL: supportDir).read(fileURL.lastPathComponent) else {
+                return GroundworkOutboxDocument(schemaVersion: Self.schemaVersion, items: [], delivered: [])
+            }
+            data = stored
+        } catch { throw GroundworkOutboxError.readFailed }
         let document: GroundworkOutboxDocument
         do { document = try GroundworkCoding.decoder().decode(GroundworkOutboxDocument.self, from: data) }
         catch { throw GroundworkOutboxError.malformed }
         guard document.schemaVersion == Self.schemaVersion else { throw GroundworkOutboxError.malformed }
-        try? fileManager.setAttributes([.posixPermissions: SessionLogger.filePermissions], ofItemAtPath: fileURL.path)
         return document
     }
 
     private func writeDocument(_ document: GroundworkOutboxDocument) throws {
         do {
-            try fileManager.createDirectory(
-                at: supportDir,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: SessionLogger.directoryPermissions]
-            )
+            let data = try GroundworkCoding.encoder().encode(document)
+            try PrivateFileStore(directoryURL: supportDir).replace(data, at: fileURL.lastPathComponent)
         } catch { throw GroundworkOutboxError.writeFailed }
-        let data: Data
-        do { data = try GroundworkCoding.encoder().encode(document) }
-        catch { throw GroundworkOutboxError.writeFailed }
-        let temporary = supportDir.appendingPathComponent(".groundwork-outbox.\(UUID().uuidString).tmp")
-        defer { try? fileManager.removeItem(at: temporary) }
-        guard fileManager.createFile(
-            atPath: temporary.path,
-            contents: data,
-            attributes: [.posixPermissions: SessionLogger.filePermissions]
-        ) else { throw GroundworkOutboxError.writeFailed }
-        do {
-            let handle = try FileHandle(forWritingTo: temporary)
-            defer { try? handle.close() }
-            try handle.synchronize()
-        } catch { throw GroundworkOutboxError.writeFailed }
-        guard rename(temporary.path, fileURL.path) == 0 else { throw GroundworkOutboxError.writeFailed }
     }
 
     private func drainOnQueue() {

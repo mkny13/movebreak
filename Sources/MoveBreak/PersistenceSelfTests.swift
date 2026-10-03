@@ -171,6 +171,12 @@ enum PersistenceSelfTests {
                 && load(outbox)?.items.isEmpty == true)
             reporter.check("Outbox is owner-readable only",
                 SelfTestSupport.posixMode(at: outbox.fileURL.path) == 0o600)
+            _ = chmod(outbox.fileURL.path, 0o644)
+            _ = chmod(fixture.url.path, 0o755)
+            _ = try outbox.readDocument()
+            reporter.check("Existing outbox and receipt ledger tighten before read",
+                SelfTestSupport.posixMode(at: outbox.fileURL.path) == 0o600
+                && SelfTestSupport.posixMode(at: fixture.url.path) == 0o700)
         } catch {
             reporter.check("Durability and recovery cases complete", false, detail: "\(error)")
         }
@@ -335,7 +341,7 @@ enum PersistenceSelfTests {
         do { try fixture.create(permissions: 0o700) }
         catch { reporter.check("Disk failure fixture created", false, detail: "\(error)") }
         let logger = SessionLogger(supportDir: fixture.url, currentOrigin: { originA })
-        reporter.check("Disk fixture becomes read-only", chmod(fixture.url.path, 0o500) == 0)
+        reporter.check("Disk fixture rejects history writes", symlink("missing-history", logger.logFile.path) == 0)
         let result = LockedBox<Result<SessionRecord, Error>?>(nil)
         var diagnostic = ""
         do {
@@ -356,7 +362,7 @@ enum PersistenceSelfTests {
         })
         reporter.check(
             "Disk failure emits an observable persistence diagnostic",
-            diagnostic.contains("SessionLogger persistence failure: Failed to write session data")
+            diagnostic.contains("SessionLogger persistence failure: Failed to read session data")
         )
         reporter.check("Disk failure performs no network work",
             !FileManager.default.fileExists(atPath: logger.logFile.path))
@@ -379,6 +385,95 @@ enum PersistenceSelfTests {
             reporter.check("Permission cases complete", false, detail: "\(error)")
         }
         try? fixture.cleanup()
+        return reporter.failureCount
+    }
+
+    private static func runFileBoundaryCases() -> Int {
+        let reporter = SelfTestReporter()
+        let fixture = SelfTestTemporaryDirectory(prefix: "movebreak-file-boundaries")
+        func rejects(_ body: () throws -> Void) -> Bool {
+            do { try body(); return false } catch { return true }
+        }
+        do {
+            try fixture.create(permissions: 0o755)
+            let store = try PrivateFileStore(directoryURL: fixture.url)
+            let original = Data("original".utf8)
+            try store.replace(original, at: "target")
+            let target = fixture.url.appendingPathComponent("target")
+            _ = chmod(target.path, 0o644)
+            reporter.check("Existing data tightens before read", try store.read("target") == original
+                && SelfTestSupport.posixMode(at: target.path) == 0o600
+                && SelfTestSupport.posixMode(at: fixture.url.path) == 0o700)
+            reporter.check("Failed partial staging write preserves original", try rejects {
+                try store.replace(Data("replacement".utf8), at: "target", write: { handle, _ in
+                    try handle.write(contentsOf: Data("partial".utf8))
+                    throw CocoaError(.fileWriteOutOfSpace)
+                })
+            } && (try store.read("target")) == original)
+            reporter.check("Failed rename preserves original", try rejects {
+                try store.replace(Data(), at: "target", renameFile: { _, _, _, _ in errno = EIO; return -1 })
+            } && (try store.read("target")) == original)
+            var sameDirectory = false
+            try store.replace(Data("new".utf8), at: "target", renameFile: { source, name, destination, target in
+                sameDirectory = source == destination && !name.contains("/")
+                return renameat(source, name, destination, target)
+            })
+            reporter.check("Atomic replacement stays in protected directory", try sameDirectory
+                && (try store.read("target")) == Data("new".utf8))
+            reporter.check("Failed and successful replacements clean staging files",
+                try FileManager.default.contentsOfDirectory(atPath: fixture.url.path) == ["target"])
+            reporter.check("Permission failure fixture is immutable", chflags(target.path, UInt32(UF_IMMUTABLE)) == 0)
+            let permissionFailure = rejects { _ = try store.read("target") }
+                && rejects { try store.append(Data("bad".utf8), to: "target") }
+                && rejects { try store.replace(Data("bad".utf8), at: "target") }
+            let unlocked = chflags(target.path, 0) == 0
+            reporter.check("Failed permission tightening rejects access and preserves original",
+                try permissionFailure && unlocked && Data(contentsOf: target) == Data("new".utf8))
+
+            let outside = fixture.url.appendingPathComponent("sentinel")
+            try original.write(to: outside)
+            _ = chmod(outside.path, 0o644)
+            for kind in ["symlink", "dangling", "directory", "fifo", "hardlink"] {
+                let path = fixture.url.appendingPathComponent(kind).path
+                switch kind {
+                case "symlink": _ = symlink(outside.path, path)
+                case "dangling": _ = symlink("absent", path)
+                case "directory": try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+                case "fifo": _ = mkfifo(path, 0o600)
+                default: _ = link(outside.path, path)
+                }
+                reporter.check("Reject \(kind) on read, append and replace",
+                    rejects { _ = try store.read(kind) }
+                    && rejects { try store.append(Data(), to: kind) }
+                    && rejects { try store.replace(Data(), at: kind) })
+            }
+            reporter.check("Rejected indirection leaves destination bytes and mode unchanged",
+                try Data(contentsOf: outside) == original && SelfTestSupport.posixMode(at: outside.path) == 0o644)
+            let alias = fixture.url.appendingPathComponent("alias")
+            _ = symlink(fixture.url.path, alias.path)
+            reporter.check("Reject directory indirection including ancestor components", rejects {
+                _ = try PrivateFileStore(directoryURL: alias.appendingPathComponent("child"))
+            })
+
+            let logger = SessionLogger(supportDir: fixture.url)
+            let outbox = GroundworkOutbox(supportDir: fixture.url, currentOrigin: { nil })
+            _ = symlink(outside.path, logger.logFile.path)
+            _ = symlink(outside.path, outbox.fileURL.path)
+            reporter.check("History and outbox reads reject symlink artifacts",
+                rejects { _ = try logger.readHistory() } && rejects { _ = try outbox.readDocument() })
+            reporter.check("History append rejects symlink artifact", rejects {
+                try logger.append(SessionRecord(completion: completion(), destination: nil))
+            })
+            let result = LockedBox<Result<Void, Error>?>(nil)
+            outbox.enqueue(SessionRecord(completion: completion(), destination: nil)) { result.value = $0 }
+            reporter.check("Outbox enqueue fails closed on suspicious artifact", eventually {
+                if case .failure? = result.value { return true }; return false
+            })
+            try fixture.cleanup()
+        } catch {
+            reporter.check("File boundary fixtures complete", false, detail: "\(error)")
+            try? fixture.cleanup()
+        }
         return reporter.failureCount
     }
 
@@ -405,6 +500,7 @@ enum PersistenceSelfTests {
         print("Disk failure observability & protected file modes")
         failures += runDiskFailureCases()
         failures += runPermissionCases()
+        failures += runFileBoundaryCases()
         return failures
     }
 }

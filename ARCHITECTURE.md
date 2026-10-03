@@ -161,7 +161,20 @@ unconfigured states remain distinct. Live empty results are never replaced by ca
 bundled content. No routine refresh occurs at startup or from the audio polling loop.
 
 Local session data lives under `~/Library/Application Support/MoveBreak/`. The directory is
-created or tightened to mode `0700`; contained files are tightened to `0600`.
+created or tightened to mode `0700`; live history, outbox (including receipts), and cache
+files are tightened to `0600` before access. `PrivateFileStore` walks directories using
+`openat` with `O_NOFOLLOW`, pins the containing directory descriptor, verifies current-user
+ownership and regular single-link files, removes extended ACLs, and checks all permission
+changes. Only the fixed macOS `/var` and `/tmp` aliases are expanded to `/private`; other
+symlink ancestors, symlink targets, hard-linked files, and special files fail closed.
+Cache access also protects its MoveBreak parent. Unrelated legacy artifacts are not scanned.
+Atomic updates use exclusive `0600` staging files in the pinned directory, synchronize before
+`renameat`, then synchronize the directory. Failed staging/rename operations remove only the
+temporary file; malformed outbox/cache originals are preserved. A post-rename sync failure
+reports failure even though the replacement may already be visible. Reads and writes surface
+boundary failures through throwing APIs, cache corrupt states/save diagnostics, and completion
+callbacks. This protects against other users and path indirection, not malicious code already
+running as the same user (which can alter owned directories or permissions).
 `sessions.jsonl` is append-only local history and is synchronized before acknowledgement or
 network work. New records embed the structured completion, stable client UUID, and destination
 origin; missing optional fields keep old JSONL lines readable and prevent historical upload.
@@ -323,6 +336,7 @@ Each tracked Swift source appears exactly once below.
 | Module | Responsibility |
 |---|---|
 | [`SessionRecord.swift`](Sources/MoveBreak/SessionRecord.swift) | Backward-compatible local summary plus optional structured completion and destination. |
+| [`PrivateFileStore.swift`](Sources/MoveBreak/PrivateFileStore.swift) | Descriptor-relative owner-only file reads, durable appends, and atomic replacements. |
 | [`SessionLogger.swift`](Sources/MoveBreak/SessionLogger.swift) | Serial durable JSONL writes and launch reconciliation into the outbox. |
 | [`GroundworkOutbox.swift`](Sources/MoveBreak/GroundworkOutbox.swift) | Owns atomic origin-bound queue state, receipts, failure classification, backoff, and retry status. |
 | [`Keychain.swift`](Sources/MoveBreak/Keychain.swift) | Wraps device-local Keychain storage behind typed errors and a testable backend. |

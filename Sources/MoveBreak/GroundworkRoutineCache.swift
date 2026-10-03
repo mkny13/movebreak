@@ -51,7 +51,6 @@ final class GroundworkRoutineCache {
     ) throws {
         try response.validate()
         guard response.routine != nil else { return } // A valid empty response must remain empty.
-        try ensureDirectory()
         let record = Record(
             schemaVersion: GroundworkSchema.version,
             origin: origin,
@@ -62,17 +61,19 @@ final class GroundworkRoutineCache {
         )
         let data = try GroundworkCoding.encoder().encode(record)
         let destination = fileURL(origin: origin, locationID: locationID, durationMinutes: durationMinutes)
-        try data.write(to: destination, options: [.atomic])
-        guard chmod(destination.path, 0o600) == 0 else {
-            throw CocoaError(.fileWriteNoPermission)
+        let store = try PrivateFileStore(directoryURL: directoryURL, protectingParent: true)
+        if case .corrupt = load(origin: origin, locationID: locationID, durationMinutes: durationMinutes) {
+            throw CocoaError(.fileReadCorruptFile)
         }
+        try store.replace(data, at: destination.lastPathComponent)
     }
 
     func load(origin: GroundworkOrigin, locationID: String, durationMinutes: Int) -> GroundworkCacheLookup {
         let url = fileURL(origin: origin, locationID: locationID, durationMinutes: durationMinutes)
-        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
         do {
-            let record = try GroundworkCoding.decoder().decode(Record.self, from: Data(contentsOf: url))
+            guard let data = try PrivateFileStore(directoryURL: directoryURL, protectingParent: true)
+                .read(url.lastPathComponent) else { return .missing }
+            let record = try GroundworkCoding.decoder().decode(Record.self, from: data)
             guard record.schemaVersion == GroundworkSchema.version,
                   record.origin == origin,
                   record.locationID == locationID,
@@ -105,7 +106,8 @@ final class GroundworkRoutineCache {
         switch result {
         case .success(let response):
             if response.routine == nil { return .validEmpty(generatedAt: response.generatedAt) }
-            try? store(response, origin: origin, locationID: locationID, durationMinutes: durationMinutes)
+            do { try store(response, origin: origin, locationID: locationID, durationMinutes: durationMinutes) }
+            catch { FileHandle.standardError.write(Data("Groundwork cache save failed; existing data preserved.\n".utf8)) }
             return .live(response)
         case .failure(.authentication):
             return .authFailed
@@ -126,17 +128,6 @@ final class GroundworkRoutineCache {
             return value
         }
         return nil
-    }
-
-    private func ensureDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: directoryURL,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        guard chmod(directoryURL.path, 0o700) == 0 else {
-            throw CocoaError(.fileWriteNoPermission)
-        }
     }
 
     private func fileURL(origin: GroundworkOrigin, locationID: String, durationMinutes: Int) -> URL {
