@@ -71,7 +71,12 @@ struct GroundworkOrigin: Codable, Equatable, Hashable {
     let port: Int
 
     init?(url: URL) {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+        // Older Foundation versions decode host escapes when building URLComponents.
+        // Inspect the serialized authority first so encoded hosts fail closed on every OS.
+        let serialized = url.absoluteString
+        guard let authorityStart = serialized.range(of: "://")?.upperBound,
+              !serialized[authorityStart...].prefix(while: { !"/?#".contains($0) }).contains("%"),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               url.baseURL == nil, components.user == nil, components.password == nil,
               components.fragment == nil,
               let scheme = components.scheme?.lowercased(),

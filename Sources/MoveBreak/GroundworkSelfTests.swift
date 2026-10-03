@@ -203,6 +203,7 @@ enum GroundworkSelfTests {
             "https://groundwork.example/?token=secret", "https://groundwork.example/#secret",
             "https://groundwork.example:0", "https://groundwork.example:65536",
             "https://%67roundwork.example",
+            "http://%6cocalhost:3000",
         ]
         for (index, raw) in invalidURLs.enumerated() {
             let url = URL(string: raw)
@@ -218,6 +219,7 @@ enum GroundworkSelfTests {
             "https://groundwork.example:444/next", "http://groundwork.example/next",
             "https://evil.example/next", "https://user:password@groundwork.example/next",
             "https://groundwork.example/next#fragment",
+            "https://%67roundwork.example/next",
         ].enumerated() {
             let proposed = URLRequest(url: URL(string: raw)!)
             reporter.check("unsafe redirect rejected case \(index)",
