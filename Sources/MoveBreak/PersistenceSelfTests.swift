@@ -171,6 +171,12 @@ enum PersistenceSelfTests {
                 && load(outbox)?.items.isEmpty == true)
             reporter.check("Outbox is owner-readable only",
                 SelfTestSupport.posixMode(at: outbox.fileURL.path) == 0o600)
+            _ = chmod(outbox.fileURL.path, 0o644)
+            _ = chmod(fixture.url.path, 0o755)
+            _ = try outbox.readDocument()
+            reporter.check("Existing outbox and receipt ledger tighten before read",
+                SelfTestSupport.posixMode(at: outbox.fileURL.path) == 0o600
+                && SelfTestSupport.posixMode(at: fixture.url.path) == 0o700)
         } catch {
             reporter.check("Durability and recovery cases complete", false, detail: "\(error)")
         }
@@ -416,6 +422,13 @@ enum PersistenceSelfTests {
                 && (try store.read("target")) == Data("new".utf8))
             reporter.check("Failed and successful replacements clean staging files",
                 try FileManager.default.contentsOfDirectory(atPath: fixture.url.path) == ["target"])
+            reporter.check("Permission failure fixture is immutable", chflags(target.path, UInt32(UF_IMMUTABLE)) == 0)
+            let permissionFailure = rejects { _ = try store.read("target") }
+                && rejects { try store.append(Data("bad".utf8), to: "target") }
+                && rejects { try store.replace(Data("bad".utf8), at: "target") }
+            let unlocked = chflags(target.path, 0) == 0
+            reporter.check("Failed permission tightening rejects access and preserves original",
+                try permissionFailure && unlocked && Data(contentsOf: target) == Data("new".utf8))
 
             let outside = fixture.url.appendingPathComponent("sentinel")
             try original.write(to: outside)
