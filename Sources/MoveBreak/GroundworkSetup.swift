@@ -50,7 +50,7 @@ enum GroundworkSetup {
 
         let readToken = secretReader ?? { SecretInput.readSecret(prompt: $0) }
         guard let token = readToken("Dedicated MoveBreak bearer token: ")?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty else {
+              GroundworkClient.validToken(token) else {
             writeError("no token entered")
             return 1
         }
@@ -58,7 +58,7 @@ enum GroundworkSetup {
         do {
             try Keychain.set(token, forAccount: origin.string, service: GroundworkClient.tokenService)
         } catch {
-            writeError("failed to store token in Keychain: \(error.localizedDescription)")
+            writeError("failed to store token in Keychain")
             return 1
         }
 
@@ -71,16 +71,14 @@ enum GroundworkSetup {
     }
 
     static func validateBaseURL(_ url: URL) -> URL? {
-        guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
-              url.path.isEmpty || url.path == "/" else { return nil }
-        let isLoopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-        guard scheme == "https" || (scheme == "http" && isLoopback) else { return nil }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.scheme = scheme
-        components?.host = host
-        components?.path = "/"
-        return components?.url
+        guard GroundworkOrigin(url: url) != nil,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.query == nil,
+              components.percentEncodedPath.isEmpty || components.percentEncodedPath == "/" else { return nil }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        components.path = "/"
+        return components.url
     }
 
     static func validateLocationID(_ value: String) -> Bool {

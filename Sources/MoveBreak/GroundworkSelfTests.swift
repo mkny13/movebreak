@@ -192,6 +192,92 @@ enum GroundworkSelfTests {
         return reporter.failureCount
     }
 
+    private static func runBoundaryCases() -> Int {
+        let reporter = SelfTestReporter()
+        let sentinel = "SENTINEL_BOUNDARY_SECRET"
+        let invalidURLs = [
+            "http://groundwork.example", "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example", "http://127.1", "http://2130706433",
+            "https://user:password@groundwork.example", "https://groundwork.example/path",
+            "https://groundwork.example/%2f", "https://groundwork.example//",
+            "https://groundwork.example/?token=secret", "https://groundwork.example/#secret",
+            "https://groundwork.example:0", "https://groundwork.example:65536",
+            "https://%67roundwork.example",
+            "http://%6cocalhost:3000",
+        ]
+        for (index, raw) in invalidURLs.enumerated() {
+            let url = URL(string: raw)
+            reporter.check("untrusted base URL rejected case \(index)",
+                           url.flatMap(GroundworkSetup.validateBaseURL) == nil)
+        }
+        for raw in ["https://GROUNDWORK.example:443", "http://localhost:3000",
+                    "http://127.0.0.1:3000", "http://[::1]:3000"] {
+            reporter.check("explicit supported origin accepted", URL(string: raw).flatMap(GroundworkSetup.validateBaseURL) != nil)
+        }
+        let original = URLRequest(url: URL(string: "https://groundwork.example/start")!)
+        for (index, raw) in [
+            "https://groundwork.example:444/next", "http://groundwork.example/next",
+            "https://evil.example/next", "https://user:password@groundwork.example/next",
+            "https://groundwork.example/next#fragment",
+            "https://%67roundwork.example/next",
+        ].enumerated() {
+            let proposed = URLRequest(url: URL(string: raw)!)
+            reporter.check("unsafe redirect rejected case \(index)",
+                           GroundworkURLSessionTransport.redirectedRequest(from: original, proposed: proposed) == nil)
+        }
+        reporter.check("explicit default port preserves origin",
+                       GroundworkURLSessionTransport.redirectedRequest(from: original,
+                           proposed: URLRequest(url: URL(string: "https://GROUNDWORK.example:443/next")!)) != nil)
+        reporter.check("missing original redirect fails closed",
+                       GroundworkURLSessionTransport.redirectedRequest(from: nil, proposed: original) == nil)
+        let configuration = GroundworkURLSessionTransport.configuration()
+        reporter.check("transport disables cookies, caches and ambient credentials",
+                       configuration.httpCookieStorage == nil && !configuration.httpShouldSetCookies
+                       && configuration.httpCookieAcceptPolicy == .never
+                       && configuration.urlCache == nil && configuration.urlCredentialStorage == nil
+                       && configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
+        reporter.check("transport bounds request and total resource time",
+                       configuration.timeoutIntervalForRequest == 30 && configuration.timeoutIntervalForResource == 30)
+        for timeout in [Double.nan, Double.infinity, -Double.infinity, -1, 500] {
+            let mock = Transport()
+            let api = try? GroundworkClient(baseURL: URL(string: "https://GROUNDWORK.example")!,
+                                           token: sentinel, timeout: timeout, transport: mock)
+            _ = api?.fetchRoutine(locationID: "//evil.example/?x=1#fragment", durationMinutes: 5) { _ in }
+            reporter.check("canonical endpoint and finite timeout enforced",
+                           mock.request?.url?.host == "groundwork.example"
+                           && mock.request?.url?.path == "/api/integrations/movebreak/routine"
+                           && mock.request.map { $0.timeoutInterval.isFinite && (1...30).contains($0.timeoutInterval) } == true)
+        }
+        for token in ["", "abc\r\nInjected: value", "abc def", "abc\u{0}def"] {
+            reporter.check("invalid authorization token rejected",
+                           (try? GroundworkClient(baseURL: original.url!.deletingLastPathComponent(), token: token, transport: Transport())) == nil)
+        }
+        for status in [200, 302, 401, 403, 404, 429, 500] {
+            let mock = Transport()
+            mock.status = status
+            mock.responseData = Data(sentinel.utf8)
+            var failure: GroundworkClientError?
+            let output = try? SelfTestSupport.captureOutput {
+                let api = try? client(transport: mock)
+                _ = api?.fetchRoutine(locationID: "office", durationMinutes: 5) {
+                    if case .failure(let error) = $0 { failure = error }
+                }
+            }
+            reporter.check("response bodies never enter errors or diagnostics",
+                           failure != nil && !String(describing: failure).contains(sentinel)
+                           && output?.stdout.contains(sentinel) == false && output?.stderr.contains(sentinel) == false)
+        }
+        let mock = Transport()
+        mock.error = NSError(domain: sentinel, code: 1, userInfo: [NSLocalizedDescriptionKey: sentinel])
+        var failure: GroundworkClientError?
+        _ = (try? client(transport: mock))?.fetchRoutine(locationID: "office", durationMinutes: 5) {
+            if case .failure(let error) = $0 { failure = error }
+        }
+        reporter.check("arbitrary transport errors are sanitized",
+                       failure == .retryable(status: nil) && !String(describing: failure).contains(sentinel))
+        return reporter.failureCount
+    }
+
     private static func runCompletionCases() -> Int {
         let reporter = SelfTestReporter()
         do {
@@ -550,7 +636,7 @@ enum GroundworkSelfTests {
         let backend = KeychainBackend()
         Preferences.withDefaults(defaults) {
             Keychain.withBackend(backend) {
-                backend.writeError = KeychainError.addFailed(status: -1)
+                backend.writeError = NSError(domain: "SENTINEL_SETUP_SECRET", code: 1, userInfo: [NSLocalizedDescriptionKey: "SENTINEL_SETUP_SECRET"])
                 var failedExitCode: Int32 = -1
                 let failedOutput = try? SelfTestSupport.captureOutput {
                     failedExitCode = GroundworkSetup.execute(
@@ -599,6 +685,7 @@ enum GroundworkSelfTests {
         var failures = 0
         print("Groundwork v1 contract, transport failures & redirect boundary")
         failures += runContractAndTransportCases()
+        failures += runBoundaryCases()
         print("")
         print("Groundwork completion request encoding")
         failures += runCompletionCases()
