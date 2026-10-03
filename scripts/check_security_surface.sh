@@ -15,7 +15,7 @@ import tempfile
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
     '.github/workflows/build.yml': '29ac03f2c5fb977e2747461adcb274118a41f27eb4d6ff6ab0522f87bbb6b3f6',
-    'scripts/build_app.sh': 'c75da6100bcc564acd8155564173f07060f0caece6929df2b9485575b3a89792',
+    'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
     'scripts/check_documentation.sh': '19111a50a3f0ad954eeb7768c5bd22fe0a44607574884e609a73f47b7190ff0d',
@@ -99,9 +99,44 @@ def check(root):
         raise ValueError('\n'.join(errors) + '\nReview the change and update the explicit allowlist AND ARCHITECTURE.md; do not bypass the gate.')
 
 
+
+def build_self_test_fixtures(root):
+    # Exercise the actual build gate without invoking the compiler or signing tools.
+    source = (root / 'scripts/build_app.sh').read_text()
+    gate = source.split('echo "==> Running self-test"\n', 1)[1].split(
+        'echo "==> Assembling $APP"', 1)[0]
+    with tempfile.TemporaryDirectory(prefix='movebreak-build-self-test-') as temporary:
+        fixture = Path(temporary)
+        executable = fixture / 'build/MoveBreak'
+        executable.parent.mkdir()
+        for status in (23, 0):
+            executable.write_text(
+                '#!/bin/bash\n'
+                '[ "$#" -eq 1 ] && [ "$1" = "--self-test" ] || exit 99\n'
+                'echo "FAIL: representative_case — expected true, got false"\n'
+                'echo "additional stderr diagnostic" >&2\n'
+                f'exit {status}\n')
+            executable.chmod(0o755)
+            result = subprocess.run(
+                ['bash', '-c', 'set -euo pipefail\n' + gate + '\necho continued'],
+                cwd=fixture, capture_output=True, text=True)
+            if status:
+                assert result.returncode == status, result
+                assert not result.stdout, result
+                for message in ('representative_case', 'expected true, got false',
+                                'additional stderr diagnostic', 'self-test FAILED'):
+                    assert message in result.stderr, result
+                print('PASS: build self-test failure surfaces case/messages and preserves exit status')
+            else:
+                assert result.returncode == 0, result
+                assert result.stdout == 'continued\n' and not result.stderr, result
+                print('PASS: build self-test success stays quiet and continues')
+
+
 def fixtures():
     root = Path.cwd()
     check(root)
+    build_self_test_fixtures(root)
     cases = [
         ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')),
         ('write permission', '.github/workflows/build.yml', lambda s: s.replace('contents: read', 'contents: write', 1)),

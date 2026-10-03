@@ -55,10 +55,14 @@ echo "==> Checking documentation links and CLI coverage"
 ./scripts/check_documentation.sh ./build/MoveBreak
 
 echo "==> Running self-test"
-./build/MoveBreak --self-test > /dev/null || {
+if SELF_TEST_OUTPUT=$(./build/MoveBreak --self-test 2>&1); then
+    :
+else
+    SELF_TEST_STATUS=$?
+    printf '%s\n' "$SELF_TEST_OUTPUT" >&2
     echo "self-test FAILED — run ./build/MoveBreak --self-test to see which cases" >&2
-    exit 1
-}
+    exit "$SELF_TEST_STATUS"
+fi
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
