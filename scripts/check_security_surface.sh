@@ -14,7 +14,8 @@ import tempfile
 # Exact reviewed executable configuration: YAML is deliberately not interpreted with
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
-    '.github/workflows/build.yml': '08e58384dcc6b13cb644fa376ef6921f99243f248f2f5457c27beb0b62cca76f',
+    '.github/workflows/build.yml': '79af25462ca68915350347d8621f59d765b4fe1d5995a514bbb8207405b74786',
+    '.github/workflows/release.yml': 'c88bc10c3a24778d86e5c6d24996e31f81e0974fdbce74208f180734ab45f7b4',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
@@ -238,7 +239,7 @@ def fixtures():
         ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')),
         ('write permission', '.github/workflows/build.yml', lambda s: s.replace('contents: read', 'contents: write', 1)),
         ('verification secret', '.github/workflows/build.yml', lambda s: s.replace('  verify:\n', '  verify:\n    env:\n      TOKEN: ${{ secrets.MACOS_CERT_P12 }}\n')),
-        ('release validation', '.github/workflows/build.yml', lambda s: s.replace("github.ref_type == 'tag'", 'true')),
+        ('release validation', '.github/workflows/release.yml', lambda s: s.replace('Release tag must match vMAJOR.MINOR or vMAJOR.MINOR.PATCH', 'Release tag bypass')),
         ('manifest', 'Package.swift', lambda s: '// unexpected package'),
         ('ignored manifest', 'nested/package.json', lambda s: '{}'),
         ('vendor root', 'vendor/library.txt', lambda s: 'dependency'),

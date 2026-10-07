@@ -247,13 +247,14 @@ Runtime updater subprocesses remain the fixed `/usr/bin/ditto`, `/usr/bin/codesi
 No package manager, downloaded installer, third-party runtime, or environment-file loader
 is approved.
 
-`APPROVED` stores SHA-256 digests of the complete scripts and workflow, so new commands,
+`APPROVED` stores SHA-256 digests of the complete scripts and workflows, so new commands,
 indirect download/execute sequences, alternate workflows, permission changes, or secret
-references cannot slip through a partial shell/YAML parser. The workflow's reviewed Actions
-are full commit SHA pins with human-readable version comments. Verification is read-only
-and secret-free. Only the tag-gated release job has `contents: write`; strict numeric tag
-validation and a security check precede the step-scoped signing secrets. The certificate
-and password are unset before building, and the ephemeral keychain is cleaned up on exit.
+references cannot slip through a partial shell/YAML parser. The workflows' reviewed Actions
+are full commit SHA pins with human-readable version comments. Verification in
+`.github/workflows/build.yml` is read-only and secret-free. Only the tag-gated release job in
+`.github/workflows/release.yml` has `contents: write`; strict numeric tag validation and a
+security check precede the step-scoped signing secrets. The certificate and password are
+unset before building, and the ephemeral keychain is cleaned up on exit.
 `FRAMEWORKS` and `SWIFT_PRIMITIVES` separately constrain runtime imports and reviewed
 process/AppleScript primitive lines, including their ordering and multiplicity.
 

@@ -5,7 +5,7 @@ fast = "./scripts/build_app.sh"
 full = "./scripts/build_app.sh"
 
 [release]
-how = "Push a vMAJOR.MINOR or vMAJOR.MINOR.PATCH tag; .github/workflows/build.yml stamps the version, imports the MoveBreak Signing certificate into an ephemeral keychain, builds, packages MoveBreak.app.zip, and publishes the signed asset to a GitHub Release. Agents do not publish releases."
+how = "Push a vMAJOR.MINOR or vMAJOR.MINOR.PATCH tag; .github/workflows/release.yml stamps the version, imports the MoveBreak Signing certificate into an ephemeral keychain, builds, packages MoveBreak.app.zip, and publishes the signed asset to a GitHub Release. Agents do not publish releases."
 rollback = "Install the previous signed MoveBreak.app.zip from GitHub Releases. The updater also leaves the installed bundle untouched when candidate validation or replacement fails; rollback follows the normal verified release path rather than rewriting production data."
 
 [environments]
