@@ -155,8 +155,8 @@ def workflow_self_test_fixtures(root):
             raise ValueError('verify self-test step must run ./build/MoveBreak --self-test')
         if re.search(r'^\s+if:\s', step_block, re.MULTILINE):
             raise ValueError('verify self-test step must not have a step-level if condition')
-        if 'continue-on-error' in step_block:
-            raise ValueError('verify self-test step must not use continue-on-error')
+        if re.search(r'^\s*(?:-\s+)?continue-on-error\s*:', v, re.MULTILINE):
+            raise ValueError('verify job must not use continue-on-error at job or step level')
 
     # Validate current workflow
     validate_verify(verify)
@@ -184,6 +184,18 @@ def workflow_self_test_fixtures(root):
         raise AssertionError('continue-on-error step was not rejected')
     except ValueError:
         print('PASS: rejects continue-on-error in self-test step')
+
+    # continue-on-error at job level and on the build step
+    for label, old, new in (
+            ('job', '    runs-on: macos-14\n', '    runs-on: macos-14\n    continue-on-error: true\n'),
+            ('build step', '        run: ./scripts/build_app.sh\n',
+             '        continue-on-error: true\n        run: ./scripts/build_app.sh\n')):
+        assert old in verify, label
+        try:
+            validate_verify(verify.replace(old, new, 1))
+            raise AssertionError(f'continue-on-error on {label} was not rejected')
+        except ValueError:
+            print(f'PASS: rejects continue-on-error on verify {label}')
 
     # Missing step
     bad_verify3 = verify.replace(
