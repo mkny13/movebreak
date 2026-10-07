@@ -89,11 +89,11 @@ final class GroundworkOutbox {
             Preferences.groundworkBaseURL.flatMap(GroundworkOrigin.init)
         },
         clientFactory: @escaping ClientFactory = { origin in
-            guard let token = try Keychain.get(
+            guard let bearer = try Keychain.get(
                 forAccount: origin.string,
                 service: GroundworkClient.tokenService
             ), let url = origin.url else { return nil }
-            return try GroundworkClient(baseURL: url, token: token)
+            return try GroundworkClient(baseURL: url, bearer: bearer)
         }
     ) {
         self.fileManager = fileManager

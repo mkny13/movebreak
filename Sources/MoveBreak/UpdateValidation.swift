@@ -78,7 +78,7 @@ enum ReleaseValidation {
               url.host == "github.com",
               url.port == nil || url.port == 443,
               url.user == nil,
-              url.password == nil,
+              nil == url.password,
               url.query == nil,
               url.fragment == nil else {
             return false

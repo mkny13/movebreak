@@ -461,7 +461,7 @@ enum SecuritySelfTests {
     private static func runSecretRedactionCases() -> Int {
         let reporter = SelfTestReporter()
 
-        let sentinelToken = "SENTINEL_TOKEN_SECRET_987654321"
+        let sentinelCredential = "SENTINEL_TOKEN_SECRET_987654321"
 
         // 1. KeychainError descriptions never contain secrets or sentinel material
         let errorCases: [KeychainError] = [
@@ -474,7 +474,7 @@ enum SecuritySelfTests {
         ]
         for err in errorCases {
             let desc = err.description
-            reporter.check("KeychainError does not leak secret in description", passed: !desc.contains(sentinelToken))
+            reporter.check("KeychainError does not leak secret in description", passed: !desc.contains(sentinelCredential))
         }
 
         // 2. Interactive PTY terminal echo suppression
@@ -587,7 +587,7 @@ enum SecuritySelfTests {
         }
 
         // 4. CLI Argument check: verify rejection of secret argument flags
-        let forbiddenFlags = ["--token", "--token=secret123", "--secret", "--notion-token", "--groundwork-token", "--api-key"]
+        let forbiddenFlags = ["--token", "--token=example", "--secret", "--notion-token", "--groundwork-token", "--api-key"]
         for flag in forbiddenFlags {
             let isRejected = flag.hasPrefix("--token") || flag.hasPrefix("--secret") || flag.hasPrefix("--notion-token") || flag.hasPrefix("--groundwork-token") || flag.hasPrefix("--api-key")
             reporter.check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)

@@ -49,12 +49,12 @@ final class SerialPollScheduler {
         accept: @escaping (Input) -> Output,
         completion: @escaping (Output) -> Void
     ) -> Bool {
-        let token: UInt? = lock.withLock {
+        let requestID: UInt? = lock.withLock {
             guard isActive, !isStopped, !isInFlight else { return nil }
             isInFlight = true
             return generation
         }
-        guard let token else { return false }
+        guard let requestID else { return false }
 
         queue.async { [weak self] in
             guard let self else { return }
@@ -62,7 +62,7 @@ final class SerialPollScheduler {
 
             let output: Output? = self.lock.withLock {
                 defer { self.isInFlight = false }
-                guard self.isActive, !self.isStopped, self.generation == token else {
+                guard self.isActive, !self.isStopped, self.generation == requestID else {
                     return nil
                 }
                 return accept(input)
@@ -72,7 +72,7 @@ final class SerialPollScheduler {
             self.completionQueue.async { [weak self] in
                 guard let self else { return }
                 let shouldDeliver = self.lock.withLock {
-                    self.isActive && !self.isStopped && self.generation == token
+                    self.isActive && !self.isStopped && self.generation == requestID
                 }
                 if shouldDeliver { completion(output) }
             }

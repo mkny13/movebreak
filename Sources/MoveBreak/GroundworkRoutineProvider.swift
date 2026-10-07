@@ -31,8 +31,8 @@ final class GroundworkRoutineProvider {
         completion: @escaping (UUID, RoutineOfferState) -> Void
     ) -> UUID {
         cancel()
-        let token = UUID()
-        generation = token
+        let requestID = UUID()
+        generation = requestID
         let locationID = Preferences.groundworkLocationID ?? ""
         let duration = Preferences.groundworkDurationMinutes
 
@@ -41,7 +41,7 @@ final class GroundworkRoutineProvider {
             client = try clientFactory()
         } catch {
             deliver(
-                token: token,
+                requestID: requestID,
                 state: .error(
                     message: "Groundwork configuration could not be read.",
                     fallback: localRoutines,
@@ -49,7 +49,7 @@ final class GroundworkRoutineProvider {
                 ),
                 completion: completion
             )
-            return token
+            return requestID
         }
 
         guard let client, let origin = GroundworkOrigin(url: client.baseURL), !locationID.isEmpty else {
@@ -60,8 +60,8 @@ final class GroundworkRoutineProvider {
                 durationMinutes: duration,
                 localRoutines: localRoutines
             )
-            deliver(token: token, state: offer(from: state, localRoutines: localRoutines), completion: completion)
-            return token
+            deliver(requestID: requestID, state: offer(from: state, localRoutines: localRoutines), completion: completion)
+            return requestID
         }
 
         request = client.fetchRoutine(locationID: locationID, durationMinutes: duration) { [weak self] result in
@@ -74,12 +74,12 @@ final class GroundworkRoutineProvider {
                 localRoutines: localRoutines
             )
             self.deliver(
-                token: token,
+                requestID: requestID,
                 state: self.offer(from: availability, localRoutines: localRoutines),
                 completion: completion
             )
         }
-        return token
+        return requestID
     }
 
     func cancel() {
@@ -89,14 +89,14 @@ final class GroundworkRoutineProvider {
     }
 
     private func deliver(
-        token: UUID,
+        requestID: UUID,
         state: RoutineOfferState,
         completion: @escaping (UUID, RoutineOfferState) -> Void
     ) {
         onMain { [weak self] in
-            guard let self, self.generation == token else { return }
+            guard let self, self.generation == requestID else { return }
             self.request = nil
-            completion(token, state)
+            completion(requestID, state)
         }
     }
 

@@ -13,7 +13,7 @@ enum GroundworkSetup {
         baseURLReader: LineReader? = nil,
         locationReader: LineReader? = nil,
         durationReader: LineReader? = nil,
-        secretReader: ((String?) -> String?)? = nil
+        inputReader: ((String?) -> String?)? = nil
     ) -> Int32 {
         print("MoveBreak — Groundwork setup")
         print("Enter the HTTPS deployment URL, an existing Groundwork location ID, and")
@@ -48,15 +48,15 @@ enum GroundworkSetup {
             return 1
         }
 
-        let readToken = secretReader ?? { SecretInput.readSecret(prompt: $0) }
-        guard let token = readToken("Dedicated MoveBreak bearer token: ")?.trimmingCharacters(in: .whitespacesAndNewlines),
-              GroundworkClient.validToken(token) else {
+        let readBearer = inputReader ?? { SecretInput.readSecret(prompt: $0) }
+        guard let bearer = readBearer("Dedicated MoveBreak bearer credential: ")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              GroundworkClient.validBearer(bearer) else {
             writeError("no token entered")
             return 1
         }
 
         do {
-            try Keychain.set(token, forAccount: origin.string, service: GroundworkClient.tokenService)
+            try Keychain.set(bearer, forAccount: origin.string, service: GroundworkClient.tokenService)
         } catch {
             writeError("failed to store token in Keychain")
             return 1

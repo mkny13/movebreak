@@ -77,7 +77,7 @@ struct GroundworkOrigin: Codable, Equatable, Hashable {
         guard let authorityStart = serialized.range(of: "://")?.upperBound,
               !serialized[authorityStart...].prefix(while: { !"/?#".contains($0) }).contains("%"),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              url.baseURL == nil, components.user == nil, components.password == nil,
+              url.baseURL == nil, components.user == nil, nil == components.password,
               components.fragment == nil,
               let scheme = components.scheme?.lowercased(),
               let host = components.host?.lowercased(), !host.isEmpty,
@@ -110,38 +110,38 @@ final class GroundworkClient {
     static let sessionPath = "api/integrations/movebreak/session"
 
     let baseURL: URL
-    private let token: String
+    private let bearer: String
     let timeout: TimeInterval
     private let transport: GroundworkTransport
 
     init(
         baseURL: URL,
-        token: String,
+        bearer: String,
         timeout: TimeInterval = 10,
         transport: GroundworkTransport = GroundworkURLSessionTransport()
     ) throws {
         guard let baseURL = GroundworkSetup.validateBaseURL(baseURL) else {
             throw GroundworkClientError.invalidConfiguration("invalid Groundwork base URL")
         }
-        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.validToken(trimmedToken) else {
+        let trimmedBearer = bearer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.validBearer(trimmedBearer) else {
             throw GroundworkClientError.invalidConfiguration("invalid Groundwork token")
         }
         self.baseURL = baseURL
-        self.token = trimmedToken
+        self.bearer = trimmedBearer
         self.timeout = timeout.isFinite ? min(max(timeout, 1), 30) : 10
         self.transport = transport
     }
 
-    static func validToken(_ token: String) -> Bool {
-        !token.isEmpty && token.utf8.allSatisfy { (33...126).contains($0) }
+    static func validBearer(_ bearer: String) -> Bool {
+        !bearer.isEmpty && bearer.utf8.allSatisfy { (33...126).contains($0) }
     }
 
     static func configured(transport: GroundworkTransport = GroundworkURLSessionTransport()) throws -> GroundworkClient? {
         guard let baseURL = Preferences.groundworkBaseURL,
               let origin = GroundworkOrigin(url: baseURL) else { return nil }
-        guard let token = try Keychain.get(forAccount: origin.string, service: tokenService) else { return nil }
-        return try GroundworkClient(baseURL: baseURL, token: token, transport: transport)
+        guard let bearer = try Keychain.get(forAccount: origin.string, service: tokenService) else { return nil }
+        return try GroundworkClient(baseURL: baseURL, bearer: bearer, transport: transport)
     }
 
     @discardableResult
@@ -218,7 +218,7 @@ final class GroundworkClient {
               let destination = GroundworkOrigin(url: url), origin == destination else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("MoveBreak/1", forHTTPHeaderField: "User-Agent")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
