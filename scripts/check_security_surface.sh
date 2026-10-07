@@ -137,11 +137,76 @@ def workflow_self_test_fixtures(root):
     # Pull-request CI must execute the self-test suite explicitly after the build step.
     workflow = (root / '.github/workflows/build.yml').read_text()
     verify = workflow.split('\n  verify:\n', 1)[1].split('\n  release:\n', 1)[0]
-    step = '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n'
-    assert step in verify and verify.index('./scripts/build_app.sh') < verify.index(step), \
-        'verify job must run ./build/MoveBreak --self-test after the build'
-    assert 'continue-on-error' not in verify, 'verify job must not tolerate failures'
+
+    def validate_verify(v):
+        import re
+        if './scripts/build_app.sh' not in v:
+            raise ValueError('verify job must run ./scripts/build_app.sh')
+        step_marker = '      - name: Run self-test suite'
+        if step_marker not in v:
+            raise ValueError('verify job must contain Run self-test suite step')
+        step_start = v.index(step_marker)
+        build_idx = v.index('./scripts/build_app.sh')
+        if step_start <= build_idx:
+            raise ValueError('verify job must run ./build/MoveBreak --self-test after the build')
+        next_step = v.find('\n      - name:', step_start + len(step_marker))
+        step_block = v[step_start:next_step] if next_step != -1 else v[step_start:]
+        if 'run: ./build/MoveBreak --self-test' not in step_block:
+            raise ValueError('verify self-test step must run ./build/MoveBreak --self-test')
+        if re.search(r'^\s+if:\s', step_block, re.MULTILINE):
+            raise ValueError('verify self-test step must not have a step-level if condition')
+        if re.search(r'^\s*(?:-\s+)?continue-on-error\s*:', v, re.MULTILINE):
+            raise ValueError('verify job must not use continue-on-error at job or step level')
+
+    # Validate current workflow
+    validate_verify(verify)
     print('PASS: verify job runs the self-test suite explicitly')
+
+    # Negative fixtures
+    # Conditional skip
+    bad_verify = verify.replace(
+        '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n',
+        '      - name: Run self-test suite\n        if: ${{ false }}\n        run: ./build/MoveBreak --self-test\n'
+    )
+    try:
+        validate_verify(bad_verify)
+        raise AssertionError('conditional self-test step was not rejected')
+    except ValueError:
+        print('PASS: rejects conditional self-test step')
+
+    # continue-on-error
+    bad_verify2 = verify.replace(
+        '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n',
+        '      - name: Run self-test suite\n        continue-on-error: true\n        run: ./build/MoveBreak --self-test\n'
+    )
+    try:
+        validate_verify(bad_verify2)
+        raise AssertionError('continue-on-error step was not rejected')
+    except ValueError:
+        print('PASS: rejects continue-on-error in self-test step')
+
+    # continue-on-error at job level and on the build step
+    for label, old, new in (
+            ('job', '    runs-on: macos-14\n', '    runs-on: macos-14\n    continue-on-error: true\n'),
+            ('build step', '        run: ./scripts/build_app.sh\n',
+             '        continue-on-error: true\n        run: ./scripts/build_app.sh\n')):
+        assert old in verify, label
+        try:
+            validate_verify(verify.replace(old, new, 1))
+            raise AssertionError(f'continue-on-error on {label} was not rejected')
+        except ValueError:
+            print(f'PASS: rejects continue-on-error on verify {label}')
+
+    # Missing step
+    bad_verify3 = verify.replace(
+        '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n',
+        ''
+    )
+    try:
+        validate_verify(bad_verify3)
+        raise AssertionError('missing self-test step was not rejected')
+    except ValueError:
+        print('PASS: rejects missing self-test step')
 
 
 def fixtures():
