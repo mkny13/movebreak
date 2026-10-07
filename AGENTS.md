@@ -37,12 +37,17 @@ To run self-test directly:
 
 - [`.mahler/project.toml`](.mahler/project.toml) is the repository contract for verification,
   release, environment isolation, persistent data, rollback, and canary checks.
-- Mahler owns job worktrees and `mahler/*` branches. Work only in the assigned worktree; never
-  create or remove worktrees, edit the main checkout, or move work between checkouts.
-- A job ends only after its changes are committed, the full verify command passes, and the branch
-  is pushed. Reporting `STATUS: DONE` with nothing pushed is a failed attempt.
-- Agents do not open, watch, merge, or otherwise manage pull requests. Mahler's conductor owns
-  those mechanical steps after the agent exits.
+- Interactive sessions participate in the lease protocol: claim before editing with
+  `mahler claim movebreak#<issue>`, keep leases alive with `mahler heartbeat movebreak#<issue>`,
+  hand over completed work with `mahler ship movebreak#<issue>`, or cancel with
+  `mahler release movebreak#<issue>`.
+- Work only in your assigned worktree on branch `mahler/<N>-short-slug`; never create or remove
+  worktrees, edit the primary checkout, or switch branches in shared checkouts. Put `Fixes #N` in
+  any PR opened.
+- Agents do not open, watch, or merge pull requests: Mahler's conductor opens, reviews, and merges
+  PRs after the agent exits.
+- A job ends only after you commit changes, the full verify command passes, and you push
+  the branch. Reporting `STATUS: DONE` with nothing pushed is a failed attempt.
 - End the final response with exactly one Mahler status line: `STATUS: DONE <summary>`,
   `STATUS: NEEDS-YOU <question>`, `STATUS: BLOCKED <reason>`, or
   `STATUS: YIELDED <handoff>`.
