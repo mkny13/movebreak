@@ -14,7 +14,8 @@ import tempfile
 # Exact reviewed executable configuration: YAML is deliberately not interpreted with
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
-    '.github/workflows/build.yml': '08e58384dcc6b13cb644fa376ef6921f99243f248f2f5457c27beb0b62cca76f',
+    '.github/workflows/build.yml': '79af25462ca68915350347d8621f59d765b4fe1d5995a514bbb8207405b74786',
+    '.github/workflows/release.yml': '552885efe0c0751d144eeae4eaefd759825ed61ce1baf594d9986a471edbbc20',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
