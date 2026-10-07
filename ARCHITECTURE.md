@@ -277,8 +277,10 @@ are configured, preserving Mahler's automated conductor merges (D18). Status che
 require the branch to be up to date (`strict: false`), administrator enforcement is disabled,
 and push restrictions are unset. Force pushes and branch deletion remain disallowed.
 This is a test gate, not mandatory human approval or protection against administrator bypass.
-These settings live in GitHub, not in the checkout; the practices audit verifies the live
-configuration. Passing `verify` does not publish a release or grant signing-secret access:
+These settings live in GitHub, not in the checkout. The practices audit currently reports
+branch protection as `unknown` and cannot establish this live configuration; the documented
+settings are instead verified by read-only live GitHub API checks and a passing
+`./scripts/build_app.sh`. Passing `verify` does not publish a release or grant signing-secret access:
 release packaging and publication remain confined to the tag-gated release job described above.
 
 ## Build and test structure
