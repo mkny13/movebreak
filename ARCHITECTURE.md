@@ -270,6 +270,17 @@ The gate is a drift detector, not a proof against malicious Swift obfuscation or
 who approves an unsafe allowlist change. Its own implementation and allowlist require code
 review like the build entrypoint itself.
 
+GitHub branch protection on the default branch `main` requires the `verify` status check
+from `.github/workflows/build.yml`; squash merging is enabled. Required pull request
+reviews are unset (`null`), and no signature, deployment, or pull-request ruleset requirements
+are configured, preserving Mahler's automated conductor merges (D18). Status checks do not
+require the branch to be up to date (`strict: false`), administrator enforcement is disabled,
+and push restrictions are unset. Force pushes and branch deletion remain disallowed.
+This is a test gate, not mandatory human approval or protection against administrator bypass.
+These settings live in GitHub, not in the checkout; the practices audit verifies the live
+configuration. Passing `verify` does not publish a release or grant signing-secret access:
+release packaging and publication remain confined to the tag-gated release job described above.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
