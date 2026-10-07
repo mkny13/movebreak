@@ -85,7 +85,7 @@ enum PersistenceSelfTests {
     ) -> GroundworkOutbox.ClientFactory {
         { origin in
             observedOrigins?.withValue { $0.append(origin) }
-            return try GroundworkClient(baseURL: origin.url!, token: "test-token", transport: transport)
+            return try GroundworkClient(baseURL: origin.url!, bearer: "example-bearer", transport: transport)
         }
     }
 

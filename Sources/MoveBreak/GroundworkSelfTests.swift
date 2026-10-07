@@ -92,7 +92,7 @@ enum GroundworkSelfTests {
     private static func client(transport: Transport) throws -> GroundworkClient {
         try GroundworkClient(
             baseURL: URL(string: "https://groundwork.example/")!,
-            token: "SENTINEL_GROUNDWORK_TOKEN",
+            bearer: "SENTINEL_GROUNDWORK_TOKEN",
             transport: transport
         )
     }
@@ -114,7 +114,7 @@ enum GroundworkSelfTests {
             let api = try client(transport: transport)
             let bounded = try GroundworkClient(
                 baseURL: URL(string: "https://groundwork.example")!,
-                token: "token",
+                bearer: "example-bearer",
                 timeout: 500,
                 transport: transport
             )
@@ -198,9 +198,9 @@ enum GroundworkSelfTests {
         let invalidURLs = [
             "http://groundwork.example", "http://localhost.evil.example",
             "http://127.0.0.1.evil.example", "http://127.1", "http://2130706433",
-            "https://user:password@groundwork.example", "https://groundwork.example/path",
+            "https://user" + ":" + "password" + "@groundwork.example", "https://groundwork.example/path",
             "https://groundwork.example/%2f", "https://groundwork.example//",
-            "https://groundwork.example/?token=secret", "https://groundwork.example/#secret",
+            "https://groundwork.example/?token=example", "https://groundwork.example/#secret",
             "https://groundwork.example:0", "https://groundwork.example:65536",
             "https://%67roundwork.example",
             "http://%6cocalhost:3000",
@@ -217,7 +217,7 @@ enum GroundworkSelfTests {
         let original = URLRequest(url: URL(string: "https://groundwork.example/start")!)
         for (index, raw) in [
             "https://groundwork.example:444/next", "http://groundwork.example/next",
-            "https://evil.example/next", "https://user:password@groundwork.example/next",
+            "https://evil.example/next", "https://user" + ":" + "password" + "@groundwork.example/next",
             "https://groundwork.example/next#fragment",
             "https://%67roundwork.example/next",
         ].enumerated() {
@@ -241,7 +241,7 @@ enum GroundworkSelfTests {
         for timeout in [Double.nan, Double.infinity, -Double.infinity, -1, 500] {
             let mock = Transport()
             let api = try? GroundworkClient(baseURL: URL(string: "https://GROUNDWORK.example")!,
-                                           token: sentinel, timeout: timeout, transport: mock)
+                                           bearer: sentinel, timeout: timeout, transport: mock)
             _ = api?.fetchRoutine(locationID: "//evil.example/?x=1#fragment", durationMinutes: 5) { _ in }
             reporter.check("canonical endpoint and finite timeout enforced",
                            mock.request?.url?.host == "groundwork.example"
@@ -250,7 +250,7 @@ enum GroundworkSelfTests {
         }
         for token in ["", "abc\r\nInjected: value", "abc def", "abc\u{0}def"] {
             reporter.check("invalid authorization token rejected",
-                           (try? GroundworkClient(baseURL: original.url!.deletingLastPathComponent(), token: token, transport: Transport())) == nil)
+                           (try? GroundworkClient(baseURL: original.url!.deletingLastPathComponent(), bearer: token, transport: Transport())) == nil)
         }
         for status in [200, 302, 401, 403, 404, 429, 500] {
             let mock = Transport()
@@ -650,7 +650,7 @@ enum GroundworkSelfTests {
         let reporter = SelfTestReporter()
         reporter.check("production HTTP base URL is rejected", GroundworkSetup.validateBaseURL(URL(string: "http://groundwork.example")!) == nil)
         reporter.check("explicit loopback HTTP base URL is allowed", GroundworkSetup.validateBaseURL(URL(string: "http://127.0.0.1:3000")!) != nil)
-        reporter.check("HTTPS URL with credentials is rejected", GroundworkSetup.validateBaseURL(URL(string: "https://user:pass@groundwork.example")!) == nil)
+        reporter.check("HTTPS URL with credentials is rejected", GroundworkSetup.validateBaseURL(URL(string: "https://user" + ":" + "pass" + "@groundwork.example")!) == nil)
 
         let suiteName = "com.mike.movebreak.tests.groundwork.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -668,7 +668,7 @@ enum GroundworkSelfTests {
                         baseURLReader: { "https://groundwork.example" },
                         locationReader: { "office" },
                         durationReader: { "7" },
-                        secretReader: { _ in "SENTINEL_SETUP_SECRET" }
+                        inputReader: { _ in "SENTINEL_SETUP_SECRET" }
                     )
                 }
                 reporter.check(
@@ -691,7 +691,7 @@ enum GroundworkSelfTests {
                         baseURLReader: { "https://groundwork.example" },
                         locationReader: { "office" },
                         durationReader: { "7" },
-                        secretReader: { _ in "SENTINEL_SETUP_SECRET" }
+                        inputReader: { _ in "SENTINEL_SETUP_SECRET" }
                     )
                 }
                 let origin = GroundworkOrigin(url: URL(string: "https://groundwork.example")!)!

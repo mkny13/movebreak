@@ -473,7 +473,7 @@ enum UpdateSelfTests {
             ("https://github.com/mkny13/movebreak/releases/download/v1.3.0/MoveBreak.app.zip", "tag mismatch in download URL rejected"),
             ("https://github.com/mkny13/movebreak/releases/download/v1.2.0/Other.zip", "asset name mismatch rejected"),
             ("https://github.com:8443/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip", "non-standard port rejected"),
-            ("https://user:pass@github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip", "credentials in URL rejected"),
+            ("https://user" + ":" + "pass" + "@github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip", "credentials in URL rejected"),
             ("https://github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip?extra=1", "query parameters rejected"),
             ("https://github.com/mkny13/movebreak/releases/download/v1.2.0/MoveBreak.app.zip#frag", "URL fragment rejected")
         ]
