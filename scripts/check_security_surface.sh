@@ -197,6 +197,26 @@ def workflow_self_test_fixtures(root):
         except ValueError:
             print(f'PASS: rejects continue-on-error on verify {label}')
 
+    # Misordered self-test step
+    build_and_test_steps = (
+        '      - name: Build and self-test with ad-hoc signature\n'
+        '        run: ./scripts/build_app.sh\n\n'
+        '      - name: Run self-test suite\n'
+        '        run: ./build/MoveBreak --self-test\n'
+    )
+    assert build_and_test_steps in verify
+    misordered_steps = (
+        '      - name: Run self-test suite\n'
+        '        run: ./build/MoveBreak --self-test\n\n'
+        '      - name: Build and self-test with ad-hoc signature\n'
+        '        run: ./scripts/build_app.sh\n'
+    )
+    try:
+        validate_verify(verify.replace(build_and_test_steps, misordered_steps, 1))
+        raise AssertionError('misordered self-test step was not rejected')
+    except ValueError:
+        print('PASS: rejects self-test step before build')
+
     # Missing step
     bad_verify3 = verify.replace(
         '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n',
