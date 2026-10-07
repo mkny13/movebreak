@@ -280,7 +280,10 @@ without requiring browser automation or network access. Each reporter records it
 the coordinator emits stable per-suite inventory and elapsed-time summaries plus a complete-run
 total while retaining zero/nonzero process exit semantics.
 
-The normal build gate deliberately performs one self-test run. The opt-in
+The normal build gate deliberately performs one self-test run; the CI `verify` job adds a
+separate explicit `./build/MoveBreak --self-test` step after the build so test execution is
+reported independently (the security-surface fixtures assert that step exists).
+Locally, the build gate still performs one run. The opt-in
 `scripts/test_health.sh` uses that already-built executable for repeated full-suite runs and
 compares their suite/case inventory to the first run. It rejects nonzero exits, unexpected
 stderr or runtime warnings, missing summaries, inventory drift, watchdog timeouts, and coarse
