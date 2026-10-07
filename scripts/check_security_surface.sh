@@ -14,7 +14,7 @@ import tempfile
 # Exact reviewed executable configuration: YAML is deliberately not interpreted with
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
-    '.github/workflows/build.yml': '29ac03f2c5fb977e2747461adcb274118a41f27eb4d6ff6ab0522f87bbb6b3f6',
+    '.github/workflows/build.yml': '08e58384dcc6b13cb644fa376ef6921f99243f248f2f5457c27beb0b62cca76f',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
@@ -133,9 +133,21 @@ def build_self_test_fixtures(root):
                 print('PASS: build self-test success stays quiet and continues')
 
 
+def workflow_self_test_fixtures(root):
+    # Pull-request CI must execute the self-test suite explicitly after the build step.
+    workflow = (root / '.github/workflows/build.yml').read_text()
+    verify = workflow.split('\n  verify:\n', 1)[1].split('\n  release:\n', 1)[0]
+    step = '      - name: Run self-test suite\n        run: ./build/MoveBreak --self-test\n'
+    assert step in verify and verify.index('./scripts/build_app.sh') < verify.index(step), \
+        'verify job must run ./build/MoveBreak --self-test after the build'
+    assert 'continue-on-error' not in verify, 'verify job must not tolerate failures'
+    print('PASS: verify job runs the self-test suite explicitly')
+
+
 def fixtures():
     root = Path.cwd()
     check(root)
+    workflow_self_test_fixtures(root)
     build_self_test_fixtures(root)
     cases = [
         ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')),

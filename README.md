@@ -431,7 +431,8 @@ Use this only as a diagnostic one-shot check; it does not bypass any trust rule:
 `./scripts/build_app.sh` first runs the offline security-surface gate and its negative
 fixtures, then compiles only tracked, architecture-inventoried Swift sources with `swiftc`, links
 only macOS system frameworks, runs `./build/MoveBreak --self-test`, assembles the app, and
-signs it. Build products are written to the ignored `build/` and `MoveBreak.app/` paths.
+signs it. Pull-request CI additionally runs `./build/MoveBreak --self-test` as its own
+workflow step so test execution is visible in the check results. Build products are written to the ignored `build/` and `MoveBreak.app/` paths.
 
 Run `./scripts/check_security_surface.sh` for the gate alone or add `--self-test` to
 exercise its isolated negative fixtures. Dependency metadata, vendor directories, unexpected
