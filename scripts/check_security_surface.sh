@@ -239,7 +239,7 @@ def fixtures():
         ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')),
         ('write permission', '.github/workflows/build.yml', lambda s: s.replace('contents: read', 'contents: write', 1)),
         ('verification secret', '.github/workflows/build.yml', lambda s: s.replace('  verify:\n', '  verify:\n    env:\n      TOKEN: ${{ secrets.MACOS_CERT_P12 }}\n')),
-        ('release validation', '.github/workflows/build.yml', lambda s: s.replace("github.ref_type == 'tag'", 'true')),
+        ('release validation', '.github/workflows/release.yml', lambda s: s.replace('Release tag must match vMAJOR.MINOR or vMAJOR.MINOR.PATCH', 'Release tag bypass')),
         ('manifest', 'Package.swift', lambda s: '// unexpected package'),
         ('ignored manifest', 'nested/package.json', lambda s: '{}'),
         ('vendor root', 'vendor/library.txt', lambda s: 'dependency'),
