@@ -16,6 +16,7 @@ import tempfile
 APPROVED = {
     '.github/workflows/build.yml': '79af25462ca68915350347d8621f59d765b4fe1d5995a514bbb8207405b74786',
     '.github/workflows/release.yml': 'c88bc10c3a24778d86e5c6d24996e31f81e0974fdbce74208f180734ab45f7b4',
+    '.github/dependabot.yml': '081d6f1bfe9f08a3a2cbf3f10355381b50f0e78dc3c640761249910adc464096',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
     'scripts/check_architecture_docs.sh': 'f5980a50b85210d23ff7f2adddaa3bf6d0388a642ff8892eb4e81d802d0d0816',
