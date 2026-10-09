@@ -255,6 +255,9 @@ are full commit SHA pins with human-readable version comments. Verification in
 `.github/workflows/release.yml` has `contents: write`; strict numeric tag validation and a
 security check precede the step-scoped signing secrets. The certificate and password are
 unset before building, and the ephemeral keychain is cleaned up on exit.
+`.github/dependabot.yml` is also a reviewed workflow-adjacent surface: it requests weekly
+GitHub Actions updates from `/`, groups minor and patch updates, and leaves major updates
+ungrouped; no runtime package-manager ecosystem is configured.
 `FRAMEWORKS` and `SWIFT_PRIMITIVES` separately constrain runtime imports and reviewed
 process/AppleScript primitive lines, including their ordering and multiplicity.
 
