@@ -287,6 +287,54 @@ settings are instead verified by read-only live GitHub API checks and a passing
 `./scripts/build_app.sh`. Passing `verify` does not publish a release or grant signing-secret access:
 release packaging and publication remain confined to the tag-gated release job described above.
 
+### Security audit #72 verification
+
+Verified on 2026-10-11 UTC (2026-10-10 America/New_York) for [#103](https://github.com/mkny13/movebreak/issues/103),
+against source revision `599e9fc74dfdde12572ae515e4191dda86eb44fd` plus this report-only
+change. Host: macOS 26.6.2 (25G83), Apple Swift 6.4 (`swiftlang-6.4.0.34.1`,
+`clang-2100.3.34.1`), arm64; build target remains macOS 14.4.
+The six rows below correspond to the completion criteria in [#72](https://github.com/mkny13/movebreak/issues/72).
+
+| Criterion | Source and verification evidence | Result / scope |
+|---|---|---|
+| Child merge provenance | #73 → [PR #79](https://github.com/mkny13/movebreak/pull/79), `66a43de9fc7b6f6d6d5cdd292b5506f0a85702fd`; #74 → [PR #82](https://github.com/mkny13/movebreak/pull/82), `28daa2459b8f3a6de62013d82b02d7183ade07a5`; #75 → [PR #77](https://github.com/mkny13/movebreak/pull/77), `7cc761ab6d789cf2ab12c711c9f66aeb3164d5cc`; #76 → [PR #78](https://github.com/mkny13/movebreak/pull/78), `d50abcb20e013147fb8ca3173b03d464ba673cff`. | `git merge-base --is-ancestor <merge-sha> 599e9fc74dfdde12572ae515e4191dda86eb44fd` exited 0 for each of the four commits. This verifies inclusion, not merely issue closure. |
+| Credentials | [GroundworkSetup.swift](Sources/MoveBreak/GroundworkSetup.swift) `execute` / `validateBaseURL`, [GroundworkClient.swift](Sources/MoveBreak/GroundworkClient.swift) `configured`, `authorizedRequest`, `GroundworkOrigin` and `GroundworkURLSessionTransport.redirectedRequest`, and [Keychain.swift](Sources/MoveBreak/Keychain.swift). [GroundworkSelfTests.swift](Sources/MoveBreak/GroundworkSelfTests.swift) `runBoundaryCases`, `runSetupCases` and request cases check HTTPS-or-explicit-loopback URLs, exact-origin Keychain isolation and Authorization headers, cross-origin/port and downgrade rejection, disabled ambient credentials/cookies/cache, and sentinel-free response/transport/setup errors and preferences. [SecuritySelfTests.swift](Sources/MoveBreak/SecuritySelfTests.swift) `runSecretRedactionCases` checks typed Keychain error redaction and terminal echo suppression. | Offline fake Keychain, injected transport and isolated preferences exercise the credential boundary; no production credential or live service is read. |
+| Private storage | [PrivateFileStore.swift](Sources/MoveBreak/PrivateFileStore.swift) `protect`, `openFile`, `append`, `replace` back [SessionLogger.swift](Sources/MoveBreak/SessionLogger.swift), [GroundworkOutbox.swift](Sources/MoveBreak/GroundworkOutbox.swift) and [GroundworkRoutineCache.swift](Sources/MoveBreak/GroundworkRoutineCache.swift). [PersistenceSelfTests.swift](Sources/MoveBreak/PersistenceSelfTests.swift) `runPermissionCases`, `runDurabilityAndRecoveryCases`, `runFileBoundaryCases` check 0700 directories, 0600 history/outbox/receipt data, existing-mode tightening, symlink/hard-link/FIFO/directory rejection, ancestor indirection, and original-byte preservation on partial-write, rename and permission failures. [GroundworkSelfTests.swift](Sources/MoveBreak/GroundworkSelfTests.swift) `runCacheCases` checks private cache modes, corrupt-file preservation and symlink rejection without changing the destination. | Disposable filesystem fixtures exercise the shared file primitive and its consumers; no personal history, receipts or cache is accessed. |
+| Updater execution | [ProcessRunner.swift](Sources/MoveBreak/ProcessRunner.swift) `UpdateToolCommand.invocation` fixes `/usr/bin/ditto`, `/usr/bin/codesign`, `/usr/bin/xattr`, structured arguments with `--` before paths, and empty environments; `ProcessRunner` assigns these directly to Foundation Process. [Updater.swift](Sources/MoveBreak/Updater.swift) orders archive/digest, extraction/tree, metadata, signature and signer checks before quarantine removal/replacement, using [UpdateSecurity.swift](Sources/MoveBreak/UpdateSecurity.swift) and [UpdateValidation.swift](Sources/MoveBreak/UpdateValidation.swift). [UpdateSelfTests.swift](Sources/MoveBreak/UpdateSelfTests.swift) `runUpdateTrustCases` checks hostile path strings remain arguments, fixed tools/environment, symlinked archives, escaped trees, digest/metadata/signer mismatch and strict-signature timeout rejection; `runProcessRunnerCases` exercises bounded output, timeout and pipe cleanup. | Command-construction assertions and offline trust fixtures cover fail-closed decisions; these are not a live signed-release installation. Existing updater timing assertions are unchanged. |
+| Pre-compilation drift gating | [check_security_surface.sh](scripts/check_security_surface.sh) `fixtures` rejects mutable Action references, write permissions, verification secrets, release-validation changes, tracked/ignored manifests, vendor roots, untracked Swift, download-to-shell, runtime dependencies and new process primitives. Full-file `APPROVED` hashes cover release-secret scope as well as workflow changes. [build_app.sh](scripts/build_app.sh) invokes the gate and negative fixtures before helpers and compilation, then compiles the NUL-delimited tracked source inventory. [build.yml](.github/workflows/build.yml) stays read-only with explicit self-test; [release.yml](.github/workflows/release.yml) validates tags and gates before step-scoped signing secrets, unsets them before build, and cleans the temporary keychain. | Standalone gate passed all 20 emitted checks, including explicit-self-test ordering/failure-propagation fixtures. This is offline drift detection, not execution of the credentialed release workflow or proof against unsafe reviewed allowlist changes. |
+| Combined verification | Commands and measured results below exercise all five suites, documentation gates and the ad-hoc packaged build together. | Results recorded below; production service, GUI and release deployment remain outside this offline audit. |
+
+Verification commands (run from the repository root, with no health environment overrides
+or explicit maximum-seconds override):
+
+```bash
+./scripts/check_security_surface.sh --self-test
+./scripts/build_app.sh
+./build/MoveBreak --self-test
+./scripts/test_health.sh --runs 5 --timeout 120 --max-slowdown 3 --grace-seconds 5
+```
+
+All four commands exited 0 on their first attempt; no failed attempts or relaxed limits.
+The security gate reported 20 passing checks. The packaged build passed security fixtures,
+canonical agent context, tracked architecture inventory, documentation links/public CLI
+coverage and its self-test, then assembled and ad-hoc signed `MoveBreak.app`.
+`codesign --verify --strict MoveBreak.app` also succeeded; `codesign -dv MoveBreak.app`
+reported `Signature=adhoc` and `Identifier=com.mike.movebreak`.
+
+The separate self-test reported **5 suites, 447 cases, 0 failures in 5.985s**:
+detection 80 (0.011s), security 110 (0.701s), persistence 52 (1.180s),
+update 102 (4.058s), groundwork 103 (0.033s), each with zero failures.
+The health command passed **5/5 runs**, preserving that exact suite/case inventory with
+zero failures and no unexpected stderr/runtime diagnostics. Run durations were 6.019s,
+6.223s, 5.797s, 6.084s and 6.006s. Its derived limit was 23.057s
+(3 × 6.019s baseline + 5s grace), with the unchanged 120s watchdog;
+slowest suite was update in run 1 (4.296s), slowest complete run was run 2 (6.223s).
+
+No manual checks remain for this bounded offline verification. Live Groundwork behavior,
+production Keychain access, GUI interaction, certificate-signed release installation and
+post-merge evidence were not exercised or claimed; the conductor owns shipping and
+post-merge tracking. The evidence change does not alter runtime code, tests or limits.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
