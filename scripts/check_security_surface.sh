@@ -14,8 +14,8 @@ import tempfile
 # Exact reviewed executable configuration: YAML is deliberately not interpreted with
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
-    '.github/workflows/build.yml': '79af25462ca68915350347d8621f59d765b4fe1d5995a514bbb8207405b74786',
-    '.github/workflows/release.yml': '5585cc3d4f353efe3fb701d4b733e7c0ad73816dc3af49902d93c48df6655b84',
+    '.github/workflows/build.yml': '9dab86a388a55c6926c1acd089b4a03e86c3366a1748458d4189c3b668863de1',
+    '.github/workflows/release.yml': 'bfdc6704ae0582c2588ce7142006280fc13d3ab265b919bf58b5aa9f6b0d9653',
     '.github/dependabot.yml': '081d6f1bfe9f08a3a2cbf3f10355381b50f0e78dc3c640761249910adc464096',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
@@ -237,7 +237,7 @@ def fixtures():
     workflow_self_test_fixtures(root)
     build_self_test_fixtures(root)
     cases = [
-        ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')),
+        ('mutable action', '.github/workflows/build.yml', lambda s: s.replace('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1', 'actions/checkout@v7')),
         ('write permission', '.github/workflows/build.yml', lambda s: s.replace('contents: read', 'contents: write', 1)),
         ('verification secret', '.github/workflows/build.yml', lambda s: s.replace('  verify:\n', '  verify:\n    env:\n      TOKEN: ${{ secrets.MACOS_CERT_P12 }}\n')),
         ('release validation', '.github/workflows/release.yml', lambda s: s.replace('Release tag must match vMAJOR.MINOR or vMAJOR.MINOR.PATCH', 'Release tag bypass')),
@@ -263,7 +263,10 @@ def fixtures():
             path = fixture / name
             original = path.read_text() if path.exists() else None
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(mutate(original or ''))
+            mutated = mutate(original or '')
+            if original is not None and mutated == original:
+                raise AssertionError(f'{label}: fixture mutation did not change {name}')
+            path.write_text(mutated)
             try:
                 check(fixture)
             except ValueError as error:
