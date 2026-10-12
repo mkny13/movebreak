@@ -258,6 +258,11 @@ unset before building, and the ephemeral keychain is cleaned up on exit.
 `.github/dependabot.yml` is also a reviewed workflow-adjacent surface: it requests weekly
 GitHub Actions updates from `/`, groups minor and patch updates, and leaves major updates
 ungrouped; no runtime package-manager ecosystem is configured.
+The release upload action `softprops/action-gh-release` is reviewed at v3.0.3 (commit
+`efb35369e0ad2afab669f228072c1b0d510eae64`). The v3 major moves the action from Node 20 to
+Node 24, which the GitHub-hosted `macos-14` runner already executes. The release boundary is
+unchanged: the `MoveBreak.app.zip` input, `github.token` binding, tag validation, permissions
+and signing-secret lifecycle. Offline verification does not execute release publication.
 `FRAMEWORKS` and `SWIFT_PRIMITIVES` separately constrain runtime imports and reviewed
 process/AppleScript primitive lines, including their ordering and multiplicity.
 
