@@ -247,6 +247,14 @@ Runtime updater subprocesses remain the fixed `/usr/bin/ditto`, `/usr/bin/codesi
 No package manager, downloaded installer, third-party runtime, or environment-file loader
 is approved.
 
+The Claude Code guard hook `.claude/hooks/guard_build_artifacts.py` is a hash-pinned reviewed
+surface in `APPROVED`. It is standard-library Python run as a `PreToolUse` hook (registered in
+`.claude/settings.json` for `Edit|Write|MultiEdit|NotebookEdit`); it exits 2 for paths in or
+equal to `MoveBreak.app/` and `build/` after resolving symlinks and `..`, and fails open
+(exit 0) on malformed input or any error. The user-only `/build-test` skill
+(`.claude/skills/build-test/SKILL.md`, `disable-model-invocation: true`) runs
+`./scripts/build_app.sh` and forbids GUI driving unless the machine is idle or 00:00-06:00.
+
 `APPROVED` stores SHA-256 digests of the complete scripts and workflows, so new commands,
 indirect download/execute sequences, alternate workflows, permission changes, or secret
 references cannot slip through a partial shell/YAML parser. The workflows' reviewed Actions

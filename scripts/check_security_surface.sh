@@ -14,6 +14,7 @@ import tempfile
 # Exact reviewed executable configuration: YAML is deliberately not interpreted with
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
+    '.claude/hooks/guard_build_artifacts.py': 'b7f9feb1a7228d76dc2050c6610272190f5a4d4912888629a2f38e4f98e144f4',
     '.github/workflows/build.yml': '9dab86a388a55c6926c1acd089b4a03e86c3366a1748458d4189c3b668863de1',
     '.github/workflows/release.yml': 'bfdc6704ae0582c2588ce7142006280fc13d3ab265b919bf58b5aa9f6b0d9653',
     '.github/dependabot.yml': '081d6f1bfe9f08a3a2cbf3f10355381b50f0e78dc3c640761249910adc464096',
