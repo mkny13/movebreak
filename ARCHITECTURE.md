@@ -168,6 +168,21 @@ ownership and regular single-link files, removes extended ACLs, and checks all p
 changes. Only the fixed macOS `/var` and `/tmp` aliases are expanded to `/private`; other
 symlink ancestors, symlink targets, hard-linked files, and special files fail closed.
 Cache access also protects its MoveBreak parent. Unrelated legacy artifacts are not scanned.
+Storage uses files, not a database connection pool. During initialization, each successful
+directory-walk step closes the preceding descriptor; a throwing exit closes the current
+descriptor. Successful initialization transfers the final directory descriptor to the store,
+which keeps it valid across operations and closes it in `deinit`. `openFile` closes a newly
+opened descriptor if validation or permission tightening fails. Reads, appends, and replacement
+staging writes own operation-local `FileHandle` instances and close them in lexical `defer`
+blocks on success and throwing exits, even if a test hook retains the handle; deallocation
+cleanup remains a fallback. Cleanup errors are ignored to preserve the original operation
+error. Missing reads acquire no file handle. Replacement target-validation descriptors close
+immediately; staging handles close before deferred staging-file removal. Appends synchronize
+the file before the directory; replacement keeps its synchronization and rename order below.
+Persistence self-tests warm disposable fixtures and compare descriptor counts after store
+teardown and autorelease-pool drainage across 20 iterations each of success, missing reads,
+symlink rejection, directory rejection, partial-write failure, rename failure, and invalid
+initializer ancestors.
 Atomic updates use exclusive `0600` staging files in the pinned directory, synchronize before
 `renameat`, then synchronize the directory. Failed staging/rename operations remove only the
 temporary file; malformed outbox/cache originals are preserved. A post-rename sync failure
