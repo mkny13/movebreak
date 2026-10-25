@@ -76,12 +76,14 @@ final class PrivateFileStore {
     func read(_ name: String) throws -> Data? {
         guard let fd = try openFile(name, flags: O_RDONLY) else { return nil }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() } // Cleanup must not replace the operation error.
         return try handle.readToEnd() ?? Data()
     }
 
     func append(_ data: Data, to name: String) throws {
         guard let fd = try openFile(name, flags: O_WRONLY | O_APPEND | O_CREAT) else { return }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() } // Cleanup must not replace the operation error.
         try handle.write(contentsOf: data)
         try handle.synchronize()
         guard fsync(directory) == 0 else { throw Self.failure() }
@@ -97,6 +99,7 @@ final class PrivateFileStore {
         guard let fd = try openFile(temporary, flags: O_WRONLY | O_CREAT | O_EXCL) else { return }
         defer { unlinkat(directory, temporary, 0) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() } // Cleanup must not replace the operation error.
         try write(handle, data)
         try handle.synchronize()
         if let target = try openFile(name, flags: O_RDONLY) { Darwin.close(target) }
