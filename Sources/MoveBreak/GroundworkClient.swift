@@ -17,10 +17,33 @@ private struct GroundworkTaskCancellation: GroundworkRequestCancellation {
     func cancel() { task.cancel() }
 }
 
-final class GroundworkURLSessionTransport: NSObject, GroundworkTransport, URLSessionTaskDelegate {
-    private lazy var session: URLSession = {
-        return URLSession(configuration: Self.configuration(), delegate: self, delegateQueue: nil)
-    }()
+private final class GroundworkSessionDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(GroundworkURLSessionTransport.redirectedRequest(from: task.originalRequest, proposed: request))
+    }
+
+}
+
+final class GroundworkURLSessionTransport: GroundworkTransport {
+    private let makeConfiguration: () -> URLSessionConfiguration
+    private let sessionLock = NSLock()
+    // Read-only internally so lifetime tests can observe release without retaining the session.
+    private(set) var session: URLSession?
+
+    init(configuration: @escaping () -> URLSessionConfiguration = GroundworkURLSessionTransport.configuration) {
+        self.makeConfiguration = configuration
+    }
+
+    deinit {
+        // Do not create a session for a transport that never sent a request.
+        session?.invalidateAndCancel()
+    }
 
     static func configuration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
@@ -40,19 +63,15 @@ final class GroundworkURLSessionTransport: NSObject, GroundworkTransport, URLSes
         _ request: URLRequest,
         completion: @escaping (Data?, URLResponse?, Error?) -> Void
     ) -> GroundworkRequestCancellation {
-        let task = session.dataTask(with: request, completionHandler: completion)
+        sessionLock.lock()
+        if session == nil {
+            session = URLSession(configuration: makeConfiguration(),
+                                 delegate: GroundworkSessionDelegate(), delegateQueue: nil)
+        }
+        let task = session!.dataTask(with: request, completionHandler: completion)
+        sessionLock.unlock()
         task.resume()
         return GroundworkTaskCancellation(task: task)
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(Self.redirectedRequest(from: task.originalRequest, proposed: request))
     }
 
     static func redirectedRequest(from original: URLRequest?, proposed: URLRequest) -> URLRequest? {

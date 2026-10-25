@@ -43,6 +43,95 @@ enum GroundworkSelfTests {
         }
     }
 
+    // Every request is intercepted, including unexpected URLs: no network fallback.
+    private final class LifetimeProtocol: URLProtocol {
+        static var started = DispatchSemaphore(value: 0)
+        static var stopped = DispatchSemaphore(value: 0)
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            Self.started.signal()
+            switch request.url!.lastPathComponent {
+            case "completed":
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                               httpVersion: "HTTP/1.1", headerFields: nil)!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data("offline".utf8))
+                client?.urlProtocolDidFinishLoading(self)
+            case "failed":
+                client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            default:
+                break // Remain pending until explicit cancellation or transport teardown.
+            }
+        }
+        override func stopLoading() { Self.stopped.signal() }
+    }
+
+    private static func runTransportLifetimeCases() -> Int {
+        let reporter = SelfTestReporter()
+        func wait(_ semaphore: DispatchSemaphore) -> Bool {
+            semaphore.wait(timeout: .now() + 3) == .success
+        }
+        func eventually(_ condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            return condition()
+        }
+        for mode in ["completed", "failed", "cancelled", "abandoned", "never-started"] {
+            LifetimeProtocol.started = DispatchSemaphore(value: 0)
+            LifetimeProtocol.stopped = DispatchSemaphore(value: 0)
+            let completed = DispatchSemaphore(value: 0)
+            var configurationCount = 0
+            weak var weakTransport: GroundworkURLSessionTransport?
+            weak var weakSession: URLSession?
+            autoreleasepool {
+                var transport: GroundworkURLSessionTransport? = GroundworkURLSessionTransport(configuration: {
+                    configurationCount += 1
+                    let configuration = GroundworkURLSessionTransport.configuration()
+                    configuration.protocolClasses = [LifetimeProtocol.self]
+                    return configuration
+                })
+                weakTransport = transport
+                if mode != "never-started" {
+                    var cancellation: GroundworkRequestCancellation? = transport!.send(
+                        URLRequest(url: URL(string: "https://offline.invalid/\(mode)")!)
+                    ) { data, response, error in
+                        // Report on the test thread below; signal only if the expected outcome arrived.
+                        let code = (error as? URLError)?.code
+                        if (mode == "completed" && data == Data("offline".utf8)
+                            && (response as? HTTPURLResponse)?.statusCode == 200 && error == nil)
+                            || (mode == "failed" && code == .cannotConnectToHost)
+                            || (["cancelled", "abandoned"].contains(mode) && code == .cancelled) {
+                            completed.signal()
+                        }
+                    }
+                    weakSession = transport!.session
+                    reporter.check("\(mode) concrete fixture starts", wait(LifetimeProtocol.started))
+                    if mode == "cancelled" { cancellation?.cancel() }
+                    if mode != "abandoned" {
+                        reporter.check("\(mode) concrete callback terminates", wait(completed))
+                    }
+                    cancellation = nil
+                }
+                transport = nil
+            }
+            reporter.check("\(mode) concrete transport releases", eventually { weakTransport == nil })
+            if mode == "abandoned" {
+                reporter.check("teardown cancels pending concrete callback", wait(completed))
+            }
+            if ["cancelled", "abandoned"].contains(mode) {
+                reporter.check("\(mode) concrete fixture stops", wait(LifetimeProtocol.stopped))
+            }
+            reporter.check("\(mode) session releases after invalidation", eventually { weakSession == nil })
+            reporter.check("\(mode) session initializes only on send",
+                           configurationCount == (mode == "never-started" ? 0 : 1))
+        }
+        return reporter.failureCount
+    }
+
     private final class KeychainBackend: KeychainStorageBackend {
         var values: [String: Data] = [:]
         var writeError: Error?
@@ -710,6 +799,7 @@ enum GroundworkSelfTests {
         var failures = 0
         print("Groundwork v1 contract, transport failures & redirect boundary")
         failures += runContractAndTransportCases()
+        failures += runTransportLifetimeCases()
         failures += runBoundaryCases()
         print("")
         print("Groundwork completion request encoding")

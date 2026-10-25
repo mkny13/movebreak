@@ -144,7 +144,14 @@ the client uses the validated canonical root.
 
 The Groundwork client has injectable asynchronous transport, a bounded request timeout,
 cancellation, typed authentication/retryable/permanent failures, strict version-1 model
-validation, and GET/POST request construction. Its URLSession redirect delegate allows only
+validation, and GET/POST request construction. The transport creates its session on first send,
+serializing initialization with a lock. The session retains a separate stateless delegate that
+has no reference to the transport; transport teardown invalidates and cancels an initialized
+session without creating an unused one. Cancellation handles retain their task, not the
+transport. Offline URLProtocol lifetime tests cover completed, failed, cancelled, pending,
+and never-started transports with weak references and bounded callback waits. A configuration
+factory allows those tests to intercept requests without network access.
+Its URLSession redirect delegate allows only
 same-origin redirects and rejects cross-origin or HTTPS-to-HTTP redirects before credentials
 can be forwarded. Both origins must validate and match scheme, lowercase host, and effective
 port; redirect user information and fragments fail closed. Endpoint origins are checked before
