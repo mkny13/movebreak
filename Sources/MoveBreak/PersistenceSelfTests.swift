@@ -477,6 +477,114 @@ enum PersistenceSelfTests {
         return reporter.failureCount
     }
 
+    private static func runDescriptorLifetimeCases() -> Int {
+        let reporter = SelfTestReporter()
+        let fixture = SelfTestTemporaryDirectory(prefix: "movebreak-private-descriptors")
+        let original = Data("original".utf8)
+        enum InjectedFailure: Error { case partialWrite }
+        func rejects(_ action: () throws -> Void) -> Bool {
+            do { try action(); return false } catch { return true }
+        }
+        do {
+            try fixture.create(permissions: 0o700)
+            let target = fixture.url.appendingPathComponent("target")
+            try original.write(to: target)
+            let sentinel = fixture.url.appendingPathComponent("sentinel")
+            try original.write(to: sentinel)
+            guard symlink(sentinel.path, fixture.url.appendingPathComponent("symlink").path) == 0 else {
+                throw POSIXError(.EIO)
+            }
+            try FileManager.default.createDirectory(
+                at: fixture.url.appendingPathComponent("directory"), withIntermediateDirectories: false)
+
+            // Retaining the injected handle distinguishes lexical close from closeOnDealloc.
+            for failing in [false, true] {
+                let store = try PrivateFileStore(directoryURL: fixture.url)
+                var retained: FileHandle?
+                do {
+                    try store.replace(original, at: "target", write: { handle, data in
+                        retained = handle
+                        try handle.write(contentsOf: data)
+                        if failing { throw InjectedFailure.partialWrite }
+                    })
+                    reporter.check("Successful retained-handle replacement completes", !failing)
+                } catch {
+                    reporter.check("Lexical cleanup preserves injected error",
+                        failing && error is InjectedFailure)
+                }
+                reporter.check("Staging handle closes on \(failing ? "throwing" : "successful") exit while retained",
+                    rejects { try retained!.write(contentsOf: Data("unexpected".utf8)) })
+                try? retained?.close()
+                reporter.check("Directory stays usable after operation cleanup",
+                    try store.read("target") == original)
+            }
+
+            let scenarios = ["success", "missing", "symlink", "directory", "partial write", "rename", "initializer"]
+            for scenario in scenarios {
+                func exercise() throws {
+                    if scenario == "initializer" {
+                        reporter.check("Initializer rejects a regular-file ancestor", rejects {
+                            _ = try PrivateFileStore(directoryURL: target.appendingPathComponent("child"))
+                        })
+                        return
+                    }
+                    let store = try PrivateFileStore(directoryURL: fixture.url)
+                    switch scenario {
+                    case "success":
+                        try store.replace(original, at: "target")
+                        try store.append(Data("+".utf8), to: "target")
+                        reporter.check("Repeated read/append/replace bytes",
+                            try store.read("target") == original + Data("+".utf8))
+                        try store.replace(original, at: "target")
+                    case "missing":
+                        reporter.check("Missing read returns nil", try store.read("absent") == nil)
+                    case "symlink", "directory":
+                        reporter.check("Repeated unsafe target rejected on every operation",
+                            rejects { _ = try store.read(scenario) }
+                            && rejects { try store.append(Data("bad".utf8), to: scenario) }
+                            && rejects { try store.replace(Data("bad".utf8), at: scenario) })
+                        reporter.check("Rejected target preserves sentinel", try Data(contentsOf: sentinel) == original)
+                    case "partial write":
+                        do {
+                            try store.replace(Data("replacement".utf8), at: "target", write: { handle, _ in
+                                try handle.write(contentsOf: Data("partial".utf8))
+                                throw InjectedFailure.partialWrite
+                            })
+                            reporter.check("Partial write must throw", false)
+                        } catch {
+                            reporter.check("Partial write preserves original error", error is InjectedFailure)
+                        }
+                    default:
+                        do {
+                            try store.replace(Data(), at: "target", renameFile: { _, _, _, _ in
+                                errno = EIO
+                                return -1
+                            })
+                            reporter.check("Rename failure must throw", false)
+                        } catch {
+                            reporter.check("Rename preserves EIO", (error as? POSIXError)?.code == .EIO)
+                        }
+                    }
+                    reporter.check("Original bytes survive failure paths", try store.read("target") == original)
+                    reporter.check("No staging files remain",
+                        try !FileManager.default.contentsOfDirectory(atPath: fixture.url.path)
+                            .contains { $0.hasPrefix(".movebreak-") })
+                }
+                try autoreleasepool { try exercise() }
+                let before = SelfTestSupport.openFileDescriptorCount()
+                for _ in 0..<20 { try autoreleasepool { try exercise() } }
+                let after = SelfTestSupport.openFileDescriptorCount()
+                reporter.check("\(scenario): 20 iterations restore warmed descriptor baseline",
+                    before == after, detail: "before=\(before), after=\(after)")
+            }
+            try fixture.cleanup()
+        } catch {
+            reporter.check("Descriptor lifetime fixtures complete", false, detail: "\(error)")
+            try? fixture.cleanup()
+        }
+        return reporter.failureCount
+    }
+
     static func run() -> Int {
         var failures = 0
         print("Session record backward compatibility & stable completion identity")
@@ -501,6 +609,7 @@ enum PersistenceSelfTests {
         failures += runDiskFailureCases()
         failures += runPermissionCases()
         failures += runFileBoundaryCases()
+        failures += runDescriptorLifetimeCases()
         return failures
     }
 }
