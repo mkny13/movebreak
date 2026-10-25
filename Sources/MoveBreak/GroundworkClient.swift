@@ -18,9 +18,15 @@ private struct GroundworkTaskCancellation: GroundworkRequestCancellation {
 }
 
 final class GroundworkURLSessionTransport: NSObject, GroundworkTransport, URLSessionTaskDelegate {
-    private lazy var session: URLSession = {
-        return URLSession(configuration: Self.configuration(), delegate: self, delegateQueue: nil)
+    private let makeConfiguration: () -> URLSessionConfiguration
+    private(set) lazy var session: URLSession = {
+        return URLSession(configuration: makeConfiguration(), delegate: self, delegateQueue: nil)
     }()
+
+    init(configuration: @escaping () -> URLSessionConfiguration = GroundworkURLSessionTransport.configuration) {
+        self.makeConfiguration = configuration
+        super.init()
+    }
 
     static func configuration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
