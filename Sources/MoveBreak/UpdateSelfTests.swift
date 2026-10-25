@@ -119,6 +119,31 @@ enum UpdateSelfTests {
             detail: "stdout=\(bounded.stdout.utf8.count) bytes stderr=\(bounded.stderr.utf8.count) bytes"
         )
 
+        let mixedDescriptorsBefore = SelfTestSupport.openFileDescriptorCount()
+        var mixedPassed = true
+        for _ in 0..<12 {
+            for noisyStdout in [true, false] {
+                let command = noisyStdout
+                    ? "printf short >&2; i=0; while [ $i -lt 2048 ]; do printf x; i=$((i + 1)); done"
+                    : "printf short; i=0; while [ $i -lt 2048 ]; do printf x >&2; i=$((i + 1)); done"
+                let mixed = boundedRunner.run(
+                    executable: "/bin/sh", arguments: ["-c", command], timeout: 2
+                )
+                let capped = String(repeating: "x", count: 1_024)
+                mixedPassed = mixedPassed && mixed.isSuccess
+                    && mixed.stdout == (noisyStdout ? capped : "short")
+                    && mixed.stderr == (noisyStdout ? "short" : capped)
+                    && mixed.stdoutTruncated == noisyStdout
+                    && mixed.stderrTruncated == !noisyStdout
+            }
+        }
+        let mixedDescriptorsAfter = SelfTestSupport.openFileDescriptorCount()
+        reporter.check(
+            "mixed output truncates each stream independently with stable repeated cleanup",
+            mixedPassed && mixedDescriptorsBefore == mixedDescriptorsAfter,
+            detail: "before=\(mixedDescriptorsBefore), after=\(mixedDescriptorsAfter)"
+        )
+
         let isolatedEnvironment = runner.run(
             invocation: ProcessInvocation(executable: "/usr/bin/env", arguments: []),
             timeout: 2

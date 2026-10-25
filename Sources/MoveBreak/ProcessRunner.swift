@@ -117,14 +117,6 @@ struct ProcessRunner {
     }
 
     static func run(
-        executable: String,
-        arguments: [String],
-        timeout: TimeInterval = 30.0
-    ) -> ProcessResult {
-        shared.run(executable: executable, arguments: arguments, timeout: timeout)
-    }
-
-    static func run(
         invocation: ProcessInvocation,
         timeout: TimeInterval = 30.0
     ) -> ProcessResult {
@@ -189,17 +181,15 @@ struct ProcessRunner {
         Self.makeNonblocking(stdoutRead.fileDescriptor)
         Self.makeNonblocking(stderrRead.fileDescriptor)
 
-        var stdoutData = Data()
-        var stderrData = Data()
-        var stdoutTruncated = false
-        var stderrTruncated = false
+        var streams = [
+            StreamState(descriptor: stdoutRead.fileDescriptor),
+            StreamState(descriptor: stderrRead.fileDescriptor)
+        ]
         let startedAt = ProcessInfo.processInfo.systemUptime
         let timeoutDeadline = startedAt + max(0, timeout)
         var terminationDeadline: TimeInterval?
         var forceKillDeadline: TimeInterval?
         var timedOut = false
-        var stdoutOpen = true
-        var stderrOpen = true
         var drainStdoutFirst = true
 
         while process.isRunning {
@@ -225,91 +215,36 @@ struct ProcessRunner {
                 terminationDeadline: terminationDeadline,
                 forceKillDeadline: forceKillDeadline
             )
-            var descriptors = [
-                pollfd(
-                    fd: stdoutOpen ? stdoutRead.fileDescriptor : -1,
-                    events: Int16(POLLIN | POLLHUP | POLLERR),
-                    revents: 0
-                ),
-                pollfd(
-                    fd: stderrOpen ? stderrRead.fileDescriptor : -1,
-                    events: Int16(POLLIN | POLLHUP | POLLERR),
-                    revents: 0
-                )
-            ]
+            var descriptors = streams.map { $0.pollDescriptor }
             let waitResult = Self.waitForReadiness(&descriptors, until: waitDeadline)
             if waitResult < 0 {
                 // A permanent poll failure cannot safely identify readable streams.
                 // Retire them, but preserve timeout escalation and child reaping via
                 // deadline-only poll calls rather than returning a live child.
-                stdoutOpen = false
-                stderrOpen = false
+                for index in streams.indices {
+                    streams[index].isOpen = false
+                }
                 continue
             }
 
-            if descriptors[0].revents & Int16(POLLNVAL) != 0 {
-                stdoutOpen = false
-            }
-            if descriptors[1].revents & Int16(POLLNVAL) != 0 {
-                stderrOpen = false
-            }
-            let readableEvents = Int16(POLLIN | POLLHUP | POLLERR)
-            let stdoutReady = stdoutOpen && descriptors[0].revents & readableEvents != 0
-            let stderrReady = stderrOpen && descriptors[1].revents & readableEvents != 0
-            if drainStdoutFirst {
-                if stdoutReady {
-                    stdoutOpen = Self.drainAvailable(
-                        from: stdoutRead.fileDescriptor,
-                        into: &stdoutData,
-                        truncated: &stdoutTruncated,
-                        maximumRetainedBytes: maximumOutputBytesPerStream
-                    )
-                }
-                if stderrReady {
-                    stderrOpen = Self.drainAvailable(
-                        from: stderrRead.fileDescriptor,
-                        into: &stderrData,
-                        truncated: &stderrTruncated,
-                        maximumRetainedBytes: maximumOutputBytesPerStream
-                    )
-                }
-            } else {
-                if stderrReady {
-                    stderrOpen = Self.drainAvailable(
-                        from: stderrRead.fileDescriptor,
-                        into: &stderrData,
-                        truncated: &stderrTruncated,
-                        maximumRetainedBytes: maximumOutputBytesPerStream
-                    )
-                }
-                if stdoutReady {
-                    stdoutOpen = Self.drainAvailable(
-                        from: stdoutRead.fileDescriptor,
-                        into: &stdoutData,
-                        truncated: &stdoutTruncated,
-                        maximumRetainedBytes: maximumOutputBytesPerStream
-                    )
-                }
+            let order = drainStdoutFirst ? [0, 1] : [1, 0]
+            for index in order {
+                streams[index].drainIfReady(
+                    events: descriptors[index].revents,
+                    maximumRetainedBytes: maximumOutputBytesPerStream
+                )
             }
             drainStdoutFirst.toggle()
         }
 
         // Drain everything already written after observing exit. Reads remain
         // nonblocking, so an inherited writer in an errant descendant cannot hang us.
-        _ = Self.drainAvailable(
-            from: stdoutRead.fileDescriptor,
-            into: &stdoutData,
-            truncated: &stdoutTruncated,
-            maximumRetainedBytes: maximumOutputBytesPerStream,
-            chunkLimit: .max
-        )
-        _ = Self.drainAvailable(
-            from: stderrRead.fileDescriptor,
-            into: &stderrData,
-            truncated: &stderrTruncated,
-            maximumRetainedBytes: maximumOutputBytesPerStream,
-            chunkLimit: .max
-        )
+        for index in streams.indices {
+            streams[index].drain(
+                maximumRetainedBytes: maximumOutputBytesPerStream,
+                chunkLimit: .max
+            )
+        }
 
         let exitCode: Int32
         if timedOut || process.isRunning {
@@ -323,11 +258,46 @@ struct ProcessRunner {
         return ProcessResult(
             exitCode: exitCode,
             timedOut: timedOut,
-            stdout: String(decoding: stdoutData, as: UTF8.self),
-            stderr: String(decoding: stderrData, as: UTF8.self),
-            stdoutTruncated: stdoutTruncated,
-            stderrTruncated: stderrTruncated
+            stdout: String(decoding: streams[0].data, as: UTF8.self),
+            stderr: String(decoding: streams[1].data, as: UTF8.self),
+            stdoutTruncated: streams[0].truncated,
+            stderrTruncated: streams[1].truncated
         )
+    }
+
+    /// Per-stream capture and readiness state; descriptor ownership stays with run's defer.
+    private struct StreamState {
+        let descriptor: Int32
+        var data = Data()
+        var truncated = false
+        var isOpen = true
+
+        var pollDescriptor: pollfd {
+            pollfd(
+                fd: isOpen ? descriptor : -1,
+                events: Int16(POLLIN | POLLHUP | POLLERR),
+                revents: 0
+            )
+        }
+
+        mutating func drainIfReady(events: Int16, maximumRetainedBytes: Int) {
+            if events & Int16(POLLNVAL) != 0 {
+                isOpen = false
+            }
+            if isOpen && events & Int16(POLLIN | POLLHUP | POLLERR) != 0 {
+                drain(maximumRetainedBytes: maximumRetainedBytes)
+            }
+        }
+
+        mutating func drain(maximumRetainedBytes: Int, chunkLimit: Int = 64) {
+            isOpen = ProcessRunner.drainAvailable(
+                from: descriptor,
+                into: &data,
+                truncated: &truncated,
+                maximumRetainedBytes: maximumRetainedBytes,
+                chunkLimit: chunkLimit
+            )
+        }
     }
 
     private static func makeNonblocking(_ descriptor: Int32) {
