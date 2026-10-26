@@ -370,6 +370,40 @@ production Keychain access, GUI interaction, certificate-signed release installa
 post-merge evidence were not exercised or claimed; the conductor owns shipping and
 post-merge tracking. The evidence change does not alter runtime code, tests or limits.
 
+### Health pass #113 verification
+
+Verified on 2026-10-26 UTC (2026-10-25 America/New_York) for
+[#120](https://github.com/mkny13/movebreak/issues/120), against source revision
+`615f96333f54f5de97adcdd4026d8b71e86729c3`. Host: macOS 26.6.2 (25G83),
+Apple Swift 6.4 (`swiftlang-6.4.0.34.1`, `clang-2100.3.34.1`), arm64;
+build target remains macOS 14.4. The four rows match the parent
+[#113](https://github.com/mkny13/movebreak/issues/113) completion criteria.
+`git merge-base --is-ancestor <merge-sha> 615f96333f54f5de97adcdd4026d8b71e86729c3`
+exited 0 for each merge SHA below; none requires supersession.
+
+| Criterion | Source and verification evidence | Result / scope |
+|---|---|---|
+| #114 merged with concrete transport lifetime regressions | [PR #119](https://github.com/mkny13/movebreak/pull/119), `615f96333f54f5de97adcdd4026d8b71e86729c3`. [GroundworkClient.swift](Sources/MoveBreak/GroundworkClient.swift) uses an independent redirect delegate, creates the session only on first send, and calls `invalidateAndCancel` during teardown, as described under Configuration, credentials, and persistence above. [GroundworkSelfTests.swift](Sources/MoveBreak/GroundworkSelfTests.swift) `runTransportLifetimeCases` loops over `completed`, `failed`, `cancelled`, `abandoned`, and `never-started`, checking weak transport/session references, expected callbacks and configuration counts with bounded three-second waits. | Pass. “Real transport” means concrete `GroundworkURLSessionTransport` with an offline stub `URLProtocol` intercepting every request, not a live server. Never-started transports create no session; abandonment also exercises teardown cancellation. |
+| #115 merged with seven warmed descriptor-baseline groups | [PR #118](https://github.com/mkny13/movebreak/pull/118), `b9feff08dc04a29a1c32bb774cca0051e41afa7d`. [PrivateFileStore.swift](Sources/MoveBreak/PrivateFileStore.swift) closes operation-local handles in lexical `defer` blocks; the ownership details are recorded above. [PersistenceSelfTests.swift](Sources/MoveBreak/PersistenceSelfTests.swift) `runDescriptorLifetimeCases` covers `success`, `missing`, `symlink`, `directory`, `partial write`, `rename`, and `initializer`. Each scenario runs once in an autorelease pool to warm up, captures its own baseline, runs **20 more iterations** in individual autorelease pools, then requires exact before/after equality after store teardown. [SelfTestSupport.swift](Sources/MoveBreak/SelfTestSupport.swift) `openFileDescriptorCount` scans `0..<getdtablesize()` using `fcntl(F_GETFD)`, counting descriptors unless the result is -1 with `EBADF`. | Pass for all seven groups. Retained-handle tests additionally prove lexical close on success and throwing exits; failure fixtures preserve original bytes and reject unsafe targets. No iteration or baseline gap found. |
+| #116 merged with overload removal and one ordered drain path | [PR #117](https://github.com/mkny13/movebreak/pull/117), `5ede521282422666362870b87c7bf3f8bed15339`. `grep -rn "run(executable:" Sources/` returns only two instance calls in [UpdateSelfTests.swift](Sources/MoveBreak/UpdateSelfTests.swift). Inspection of multiline declarations in [ProcessRunner.swift](Sources/MoveBreak/ProcessRunner.swift) confirms the static executable/arguments/timeout overload is absent; the instance overload remains. One private `StreamState` implementation serves the alternating ordered stream loop and final drain through `drainAvailable`. | Pass. The merge commit's lexical decision counts are reproduced below: run 21 → 14, new StreamState 4, combined 18 < 21. These are attributed recorded counts, not an independent recount. |
+| Combined revision passes build and self-test without weakened assertions | `./scripts/build_app.sh` exited **0**, including security fixtures, agent-context and architecture inventory checks, documentation links/CLI coverage, full self-test, packaging and ad-hoc signing. The separate `./build/MoveBreak --self-test` exited **0**: **5 suites, 927 cases, 0 failures** (7.585s). Review of `git diff 1079dba..615f963 -- Sources/MoveBreak/*SelfTests.swift` found only additions: Groundwork +90/-0, Persistence +109/-0, Update +25/-0; no removed or loosened pre-existing security/lifecycle assertions and no removed `reporter.check` lines. | Pass. Build suppresses successful self-test output; the explicit run supplies the measured totals. An initial premature standalone invocation exited 127 because compilation had not yet produced the binary; the completed run above is the verification evidence. No thresholds, assertions, sources or tests were changed for this report. |
+
+Decision-count table from [commit 5ede521](https://github.com/mkny13/movebreak/commit/5ede521282422666362870b87c7bf3f8bed15339):
+the same lexical method compares instance `run(invocation:timeout:)` at `b746316`
+with the refactor, excluding comments and quoted strings, counting each listed
+decision once (optional type markers and `try?` are not ternaries).
+
+| Scope | if | guard | for | while | switch case | catch | ternary | && / \|\| | Total |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Before run | 13 | 0 | 0 | 1 | 0 | 1 | 3 | 3 | 21 |
+| After run | 6 | 0 | 3 | 1 | 0 | 1 | 2 | 1 | 14 |
+| New StreamState | 2 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 4 |
+
+Combined after: **18**, down from **21**; existing helper bodies are unchanged
+according to the recorded comparison. No manual checks or unsupported criteria remain
+for this bounded offline verification. Live Groundwork, GUI interaction and release
+deployment were not exercised; the conductor owns shipping and post-merge evidence.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
