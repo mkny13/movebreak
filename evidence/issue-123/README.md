@@ -29,6 +29,7 @@ classic safeguards; historical missing labels are not independent defects.
 
 - `./scripts/build_app.sh`: passed, including security-surface negative fixtures,
   documentation checks, compilation, complete self-tests, packaging and signing.
+  Verified on 2026-10-31 UTC with repository SHA 50779f5ee19e31b6b2c9322a2fe6f9864a678aea.
 - Installed `mahler.practices_audit.scan_project` with `GH("mkny13/movebreak")`
   and the assigned worktree: executed against live GitHub APIs. `_ci(_Tree(...))`
   discovered `['verify']` from actual workflow files; no job names were injected
