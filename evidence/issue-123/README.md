@@ -39,6 +39,28 @@ classic safeguards; historical missing labels are not independent defects.
 - No behavior implementation was made, so no failing-first implementation test
   or scanner fix is claimed. App verification does not prove remote protection.
 
+## Recheck for review follow-up
+
+At `2026-10-31T13:46:16Z`, branch `mahler/123-verify-and-correct-effective-main-protec`
+was at repository SHA
+`857db8b7460af94bd7c88d59d7f52db811c1e33e`. The PR's actual `verify` check
+passed (run `41206423750`), and `./scripts/build_app.sh` passed locally on this
+revision. These results do not establish branch protection.
+
+The current GitHub integration again returned HTTP 403 for
+`branches/main/protection`; it also denied the authenticated-user endpoint and
+reported no repository permissions. Effective branch rules and rulesets each
+returned `[]`; the repository response had `allow_squash_merge: null`. Thus
+classic settings and squash merging remain **unavailable**, not unsafe or safe.
+The checked-in workflow defines the actual PR test job as `verify`. No fresh
+Mahler protection scan or passing scanner result was produced in this run.
+
+The review's resolution paths therefore remain outstanding: obtain the
+authorized settings-context comparison and correct any confirmed gap, or, only
+after classic protection is established as safe, supply successful sanitized
+API fixtures and a tested scanner fix. Do not link this unknown result as
+passing evidence to either Mahler issue.
+
 ## Conductor follow-up
 
 Post this evidence to [mahler#1487](https://github.com/mkny13/mahler/issues/1487)
