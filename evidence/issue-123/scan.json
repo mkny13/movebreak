@@ -1,0 +1,215 @@
+{
+  "utc": "2026-10-31T13:15:11.977811+00:00",
+  "repository_sha": "50779f5ee19e31b6b2c9322a2fe6f9864a678aea",
+  "scanner_sha": "d50fc07f59cf8db11f3ab959f1814980d8917df1",
+  "api": {
+    "branches/main/protection": {
+      "exit_code": 1,
+      "body": {
+        "message": "Resource not accessible by integration",
+        "documentation_url": "https://docs.github.com/rest/branches/branch-protection#get-branch-protection",
+        "status": "403"
+      }
+    },
+    "rules/branches/main": {
+      "exit_code": 0,
+      "body": []
+    },
+    "rulesets": {
+      "exit_code": 0,
+      "body": []
+    },
+    "repository": {
+      "exit_code": 0,
+      "body": {
+        "full_name": "mkny13/movebreak",
+        "default_branch": "main",
+        "permissions": {
+          "admin": false,
+          "maintain": false,
+          "push": false,
+          "triage": false,
+          "pull": false
+        }
+      }
+    }
+  },
+  "discovered_jobs": [
+    "verify"
+  ],
+  "ci_uncertain": true,
+  "scan": {
+    "project": "movebreak",
+    "repo": "mkny13/movebreak",
+    "findings": [
+      {
+        "check": "ci-tests",
+        "state": "unknown",
+        "reason": "No proven unconditional PR test execution; workflow semantics need review.",
+        "evidence": [
+          ".github/workflows/build.yml:29 job=verify run: sudo xcode-select -s /Applications/Xcode.app",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/build_app.sh",
+          ".github/workflows/build.yml:32 job=verify run: set -euo pipefail -> ./scripts/build_app.sh:18",
+          ".github/workflows/build.yml:32 job=verify run: APP=\"MoveBreak.app\" -> ./scripts/build_app.sh:23",
+          ".github/workflows/build.yml:32 job=verify run: DEPLOY_TARGET=\"arm64-apple-macosx14.4\" -> ./scripts/build_app.sh:24",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Checking security surface\" -> ./scripts/build_app.sh:26",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/check_security_surface.sh --self-test -> ./scripts/build_app.sh:27",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Checking repository agent context\" -> ./scripts/build_app.sh:29",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/check_agent_context.sh -> ./scripts/build_app.sh:30",
+          ".github/workflows/build.yml:32 job=verify run: set -euo pipefail -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:6",
+          ".github/workflows/build.yml:32 job=verify run: AGENTS_FILE=\"AGENTS.md\" -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:10",
+          ".github/workflows/build.yml:32 job=verify run: CLAUDE_FILE=\"CLAUDE.md\" -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:11",
+          ".github/workflows/build.yml:32 job=verify run: DESIGN_FILE=\"\" -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:12",
+          ".github/workflows/build.yml:32 job=verify run: MAX_BYTES=\"4096\" -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:13",
+          ".github/workflows/build.yml:32 job=verify run: Options: -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:19",
+          ".github/workflows/build.yml:32 job=verify run: --design PATH      Supplied design-document path to reject if it exists -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:22",
+          ".github/workflows/build.yml:32 job=verify run: -h, --help         Show this help -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:24",
+          ".github/workflows/build.yml:32 job=verify run: EOF -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:25",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:34",
+          ".github/workflows/build.yml:32 job=verify run: shift 2 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:42",
+          ".github/workflows/build.yml:32 job=verify run: usage -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:45",
+          ".github/workflows/build.yml:32 job=verify run: exit 0 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:46",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:51",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:59",
+          ".github/workflows/build.yml:32 job=verify run: failed=0 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:63",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:67",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:73",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:79",
+          ".github/workflows/build.yml:32 job=verify run: trap 'rm -f \"$expected_pointer\"' EXIT -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:82",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:87",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:95",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:100",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:30 -> ./scripts/check_agent_context.sh:104",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Checking architecture documentation\" -> ./scripts/build_app.sh:32",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/check_architecture_docs.sh -> ./scripts/build_app.sh:33",
+          ".github/workflows/build.yml:32 job=verify run: set -euo pipefail -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:6",
+          ".github/workflows/build.yml:32 job=verify run: START_MARKER='<!-- architecture-module-inventory:start -->' -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:11",
+          ".github/workflows/build.yml:32 job=verify run: END_MARKER='<!-- architecture-module-inventory:end -->' -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:12",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:16",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:26",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:36",
+          ".github/workflows/build.yml:32 job=verify run: trap 'rm -rf \"$temporary_directory\"' EXIT -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:40",
+          ".github/workflows/build.yml:32 job=verify run: failed=0 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:59",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:64",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:70",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:76",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:81",
+          ".github/workflows/build.yml:32 job=verify run: echo \"Architecture module inventory matches tracked Swift sources.\" -> ./scripts/build_app.sh:33 -> ./scripts/check_architecture_docs.sh:84",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Compiling\" -> ./scripts/build_app.sh:42",
+          ".github/workflows/build.yml:32 job=verify run: mkdir -p build -> ./scripts/build_app.sh:43",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Checking documentation links and CLI coverage\" -> ./scripts/build_app.sh:54",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/check_documentation.sh ./build/MoveBreak -> ./scripts/build_app.sh:55",
+          ".github/workflows/build.yml:32 job=verify run: set -euo pipefail -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:6",
+          ".github/workflows/build.yml:32 job=verify run: scripts/check_documentation.sh --self-test -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:14",
+          ".github/workflows/build.yml:32 job=verify run: Options: -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:16",
+          ".github/workflows/build.yml:32 job=verify run: --self-test         Run deterministic success and failure fixtures -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:21",
+          ".github/workflows/build.yml:32 job=verify run: -h, --help          Show this help -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:22",
+          ".github/workflows/build.yml:32 job=verify run: EOF -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:23",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:28",
+          ".github/workflows/build.yml:32 job=verify run: trap 'rm -rf \"$fixture_directory\"' EXIT -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:33",
+          ".github/workflows/build.yml:32 job=verify run: printf '  --help    Show help.\\n  --status  Show status.\\n' -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:45",
+          ".github/workflows/build.yml:32 job=verify run: EOF -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:47",
+          ".github/workflows/build.yml:32 job=verify run: fail \"self-test broken-link fixture unexpectedly passed\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:63",
+          ".github/workflows/build.yml:32 job=verify run: fail \"self-test missing-command fixture unexpectedly passed\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:71",
+          ".github/workflows/build.yml:32 job=verify run: fail \"self-test missing-binary fixture unexpectedly passed\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:79",
+          ".github/workflows/build.yml:32 job=verify run: fail \"self-test unexecutable-binary fixture unexpectedly passed\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:87",
+          ".github/workflows/build.yml:32 job=verify run: echo \"Documentation check fixtures passed.\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:92",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:99",
+          ".github/workflows/build.yml:32 job=verify run: run_self_test -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:101",
+          ".github/workflows/build.yml:32 job=verify run: exit 0 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:102",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:108",
+          ".github/workflows/build.yml:32 job=verify run: usage -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:112",
+          ".github/workflows/build.yml:32 job=verify run: exit 0 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:113",
+          ".github/workflows/build.yml:32 job=verify run: shift -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:117",
+          ".github/workflows/build.yml:32 job=verify run: README_FILE=\"README.md\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:118",
+          ".github/workflows/build.yml:32 job=verify run: ARCHITECTURE_FILE=\"ARCHITECTURE.md\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:119",
+          ".github/workflows/build.yml:32 job=verify run: ROADMAP_FILE=\"ROADMAP.md\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:120",
+          ".github/workflows/build.yml:32 job=verify run: AGENTS_FILE=\"AGENTS.md\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:121",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:129",
+          ".github/workflows/build.yml:32 job=verify run: shift 2 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:137",
+          ".github/workflows/build.yml:32 job=verify run: usage -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:140",
+          ".github/workflows/build.yml:32 job=verify run: exit 0 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:141",
+          ".github/workflows/build.yml:32 job=verify run: exit 2 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:146",
+          ".github/workflows/build.yml:32 job=verify run: trap 'rm -rf \"$temporary_directory\"' EXIT -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:168",
+          ".github/workflows/build.yml:32 job=verify run: failed=0 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:171",
+          ".github/workflows/build.yml:32 job=verify run: continue -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:193",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:198",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:205",
+          ".github/workflows/build.yml:32 job=verify run: help_output=\"\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:206",
+          ".github/workflows/build.yml:32 job=verify run: failed=1 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:221",
+          ".github/workflows/build.yml:32 job=verify run: exit 1 -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:225",
+          ".github/workflows/build.yml:32 job=verify run: echo \"Documentation links and public CLI coverage are current.\" -> ./scripts/build_app.sh:55 -> ./scripts/check_documentation.sh:228",
+          ".github/workflows/build.yml:32 job=verify run: echo \"==> Running self-test\" -> ./scripts/build_app.sh:57",
+          ".github/workflows/build.yml:32 job=verify run: : -> ./scripts/build_app.sh:59",
+          ".github/workflows/build.yml:32 job=verify run: echo -> ./scripts/build_app.sh:77",
+          ".github/workflows/build.yml:32 job=verify run: echo \"    Note: ad-hoc signed. Chrome will re-ask for Automation permission after\" -> ./scripts/build_app.sh:78",
+          ".github/workflows/build.yml:32 job=verify run: echo \"    every rebuild. See README for the one-time stable-identity setup.\" -> ./scripts/build_app.sh:79",
+          ".github/workflows/build.yml:32 job=verify run: echo -> ./scripts/build_app.sh:82",
+          ".github/workflows/build.yml:32 job=verify run: echo \"  ./build/MoveBreak --diagnose    watch detection live\" -> ./scripts/build_app.sh:85",
+          ".github/workflows/build.yml:35 job=verify run: ./build/MoveBreak --self-test"
+        ]
+      },
+      {
+        "check": "agent-instructions",
+        "state": "pass",
+        "reason": "Effective instructions agree.",
+        "evidence": [
+          "AGENTS.md resolves to AGENTS.md",
+          "CLAUDE.md resolves to AGENTS.md"
+        ]
+      },
+      {
+        "check": "mahler-guidance",
+        "state": "pass",
+        "reason": "Canonical participation markers present.",
+        "evidence": [
+          "AGENTS.md resolves to AGENTS.md",
+          "CLAUDE.md resolves to AGENTS.md",
+          "AGENTS.md:41: canonical guidance marker",
+          "AGENTS.md:42: canonical guidance marker",
+          "AGENTS.md:43: canonical guidance marker",
+          "AGENTS.md:44: canonical guidance marker",
+          "AGENTS.md:45: canonical guidance marker",
+          "AGENTS.md:49: canonical guidance marker",
+          "AGENTS.md:50: canonical guidance marker",
+          "AGENTS.md:51: canonical guidance marker",
+          "AGENTS.md:52: canonical guidance marker",
+          "AGENTS.md:53: canonical guidance marker"
+        ]
+      },
+      {
+        "check": "verify-command",
+        "state": "unknown",
+        "reason": "Verify command uses dynamic expansion or evaluation.",
+        "evidence": [
+          "AGENTS.md:22: ./scripts/build_app.sh",
+          "AGENTS.md:22: ./scripts/build_app.sh",
+          ".mahler/project.toml:4: ./scripts/build_app.sh",
+          ".mahler/project.toml:5: ./scripts/build_app.sh",
+          ".mahler/project.toml:25: ./scripts/build_app.sh",
+          "effective verify: ./scripts/build_app.sh",
+          ".github/workflows/build.yml:32 job=verify run: ./scripts/build_app.sh",
+          ".github/workflows/build.yml:32: dynamic command"
+        ]
+      },
+      {
+        "check": "tracked-secrets",
+        "state": "pass",
+        "reason": "No candidates in inspected tracked text; heuristics do not prove absence of credentials or private data. Git history is not inspected.",
+        "evidence": [
+          "git ls-files -z: tracked text inspected"
+        ]
+      },
+      {
+        "check": "branch-protection",
+        "state": "unknown",
+        "reason": "Default-branch protection metadata is unavailable or unsupported.",
+        "evidence": [
+          "GitHub API: repository default_branch/allow_squash_merge",
+          "GitHub API: branches/<default>/protection; rules/branches/<default>",
+          "default_branch=main; allow_squash_merge=None"
+        ]
+      }
+    ]
+  }
+}
