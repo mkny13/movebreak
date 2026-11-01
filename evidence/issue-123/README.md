@@ -19,3 +19,14 @@ Settings > Branches > main: enable "Do not allow bypassing the above settings" (
 squash merging on. Then re-run the Mahler branch-protection scan and link the pass to mahler#1487 and mahler#800.
 
 No scanner patch is warranted: the scanner correctly refuses to pass this state. No scan pass was obtained; none is claimed.
+
+## Update 2026-11-01: owner applied settings
+Owner comment on #123 (2026-11-01) reports read-back from `branches/main/protection`: strict=true,
+enforce_admins=true, required check `verify` (matches the `verify` job in `.github/workflows/build.yml`),
+force pushes off, deletions off. That is the owner's read-back, not a read by this run.
+
+This run (Mahler build identity) still gets HTTP 403 on `branches/main/protection`, so it cannot run a
+passing scan: `_protection` in the scanner needs that read and returns `unknown` without it. No pass is claimed.
+The scanner needs no fix: it refuses to classify unreadable state, as intended. Open item: run the
+branch-protection scan with a credential that can read branch protection, then link the result
+(repo SHA, scanner SHA, UTC time) to mahler#1487 and mahler#800.
