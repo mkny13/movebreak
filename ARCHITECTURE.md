@@ -312,13 +312,15 @@ review like the build entrypoint itself.
 GitHub branch protection on the default branch `main` requires the `verify` status check
 from `.github/workflows/build.yml`; squash merging is enabled. Required pull request
 reviews are unset (`null`), and no signature, deployment, or pull-request ruleset requirements
-are configured, preserving Mahler's automated conductor merges (D18). Status checks do not
-require the branch to be up to date (`strict: false`), administrator enforcement is disabled,
-and push restrictions are unset. Force pushes and branch deletion remain disallowed.
-This is a test gate, not mandatory human approval or protection against administrator bypass.
+are configured, preserving Mahler's automated conductor merges (D18). Status checks require
+the branch to be up to date (`strict: true`), administrator enforcement is active
+(`enforce_admins: true`), and push restrictions are unset. Force pushes (`allow_force_pushes: false`)
+and branch deletion (`allow_deletions: false`) remain disallowed. This enforces automated
+test verification for all contributors including administrators, without requiring human review.
 These settings live in GitHub, not in the checkout. The practices audit currently reports
 branch protection as `unknown` and cannot establish this live configuration; the documented
-settings are instead verified by read-only live GitHub API checks and a passing
+settings are verified by the 2026-11-04 owner verification (`gh api repos/mkny13/movebreak/branches/main/protection`
+on `50779f5ee19e31b6b2c9322a2fe6f9864a678aea`), read-only live GitHub API checks, and a passing
 `./scripts/build_app.sh`. Passing `verify` does not publish a release or grant signing-secret access:
 release packaging and publication remain confined to the tag-gated release job described above.
 
