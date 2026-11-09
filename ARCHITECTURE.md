@@ -406,6 +406,36 @@ according to the recorded comparison. No manual checks or unsupported criteria r
 for this bounded offline verification. Live Groundwork, GUI interaction and release
 deployment were not exercised; the conductor owns shipping and post-merge evidence.
 
+### Runtime boundary audit #127
+
+Audited on 2026-11-08 UTC for [#127](https://github.com/mkny13/movebreak/issues/127)
+(part of [#126](https://github.com/mkny13/movebreak/issues/126)), against source revision
+`79f84b046fba594a7964d6aaa931d9abc6fa71af` plus the two self-test additions described
+below. Host: macOS 26.6.2, arm64; build target macOS 14.4. This is a bounded re-audit with
+evidence, not a claim that the product has no vulnerabilities. The historical #72 evidence
+above is unchanged. “Unpooled URLs” is read as `URLSession` lifetime/reuse plus outbound
+URL/origin validation (correctness and security, not performance); “denial lists” as
+`ignoredApps` precedence and explicit rejection of unsupported browsers/executables. No
+generic remote deny-list service exists or was added.
+
+| Row | Source and test evidence | Result / limitations |
+|---|---|---|
+| Credential input, storage, redaction | [SecretInput.swift](Sources/MoveBreak/SecretInput.swift) `readSecret` (no echo, restored termios), [Keychain.swift](Sources/MoveBreak/Keychain.swift) `KeychainError.description`, [GroundworkSetup.swift](Sources/MoveBreak/GroundworkSetup.swift) `execute`/`validateBaseURL`, [URLDisplay.swift](Sources/MoveBreak/URLDisplay.swift) `sanitize`. [SecuritySelfTests.swift](Sources/MoveBreak/SecuritySelfTests.swift) `runSecretRedactionCases` (PTY echo, pipe input, sentinel-free errors, and the new table-driven diagnostic URL cases with synthetic userinfo/deep-path/query/fragment sentinels); [GroundworkSelfTests.swift](Sources/MoveBreak/GroundworkSelfTests.swift) `runSetupCases` (read-only evidence). | **Pass**, with finding F1 (low). `URLDisplay.sanitize` intentionally retains host and the *first* path segment, so a secret placed in the first segment is displayed (pinned by a “documented limitation” case). Repo callers pass browsing URLs, not Groundwork endpoints. Proposed fix: drop the path from non-verbose output or allow-list known segments. Fake Keychain and PTYs only; no production Keychain item read. |
+| URL origin, redirect, session reuse | [GroundworkClient.swift](Sources/MoveBreak/GroundworkClient.swift) `GroundworkOrigin`, `authorizedRequest`, `GroundworkURLSessionTransport.redirectedRequest` (exact-origin, no downgrade, ephemeral configuration, session created lazily and `invalidateAndCancel` on teardown). [GroundworkSelfTests.swift](Sources/MoveBreak/GroundworkSelfTests.swift) `runBoundaryCases`, `runTransportLifetimeCases` (read-only evidence). | **Pass** for the offline stub `URLProtocol` transport. Reuse is bounded to one transport per client with explicit teardown (correctness/leak concern, not a performance claim). No live endpoint contacted. |
+| Private-file permissions and link defenses | [PrivateFileStore.swift](Sources/MoveBreak/PrivateFileStore.swift) `protect`, `openFile`, `append`, `replace`; consumers [SessionLogger.swift](Sources/MoveBreak/SessionLogger.swift), [GroundworkOutbox.swift](Sources/MoveBreak/GroundworkOutbox.swift), [GroundworkRoutineCache.swift](Sources/MoveBreak/GroundworkRoutineCache.swift). [PersistenceSelfTests.swift](Sources/MoveBreak/PersistenceSelfTests.swift) `runPermissionCases`, `runFileBoundaryCases`, `runDescriptorLifetimeCases` (read-only evidence). | **Pass** for 0700/0600 modes and symlink/hard-link/FIFO/directory rejection on temporary fixtures. Limitation: same-user processes can still read files they are permitted to read; no encryption at rest. |
+| Updater trust and direct process arguments/environment | [ProcessRunner.swift](Sources/MoveBreak/ProcessRunner.swift) `UpdateToolCommand.invocation`, [Updater.swift](Sources/MoveBreak/Updater.swift), [UpdateSecurity.swift](Sources/MoveBreak/UpdateSecurity.swift), [UpdateValidation.swift](Sources/MoveBreak/UpdateValidation.swift). [UpdateSelfTests.swift](Sources/MoveBreak/UpdateSelfTests.swift) `runUpdateTrustCases` section 6: existing fixed-tool cases plus the new hostile-path matrix over all three `UpdateToolCommand` cases (space, leading hyphen, bare `--`, single/double quote, newline, shell metacharacters), asserting fixed absolute executable, exact argument list with `--` before paths, every path as one argument, and empty environment; nothing hostile is executed. | **Pass**. No shell is involved; `Process` receives the argument array directly. Limitation: not a live signed-release installation; `Process.run` of fixed system tools themselves is trusted. |
+| Browser allowlist and ignored-app precedence | [BrowserTabInspector.swift](Sources/MoveBreak/BrowserTabInspector.swift) `isBrowserSupported`, `Dialect(bundleID:)`, `classify`, `matchesPattern`; [SessionDetector.swift](Sources/MoveBreak/SessionDetector.swift) filters `ignoredApps` via `BundleIdentity.belongs` before relevance; [Preferences.swift](Sources/MoveBreak/Preferences.swift). [SecuritySelfTests.swift](Sources/MoveBreak/SecuritySelfTests.swift) `runHostBoundaryCases`, `runIgnoredAppsPrecedenceCases`, `runUnsupportedBrowserCases`. | **Pass**. Unsupported browsers return `.unknown` without running AppleScript; ignored apps are dropped before classification. Limitation: AppleScript sources are fixed strings, with no interpolated user input found. |
+| Same-user remote commands and Automation permissions | [RemoteControl.swift](Sources/MoveBreak/RemoteControl.swift) `Command` (closed set: show, quit, pause) over `DistributedNotificationCenter`; Automation use is limited to `NSAppleScript` in `BrowserTabInspector.runScript`, with a usage string in `Resources/Info.plist`; [main.swift](Sources/MoveBreak/main.swift) dispatch. | **Limited**, finding F2 (low). Notifications are unauthenticated: any process of the same user can post show/quit/pause. Impact is local nuisance (quit/pause), with no data or code path. Proposed fix if desired: ignore `quit`/`pause` unless sent by an in-app-verified channel, or drop remote `quit`. Not reproduced live (would affect a running instance); verified by code reading. |
+
+Verification (run from the repository root at the revision above): `./scripts/check_security_surface.sh --self-test`
+exited 0; `./scripts/build_app.sh` exited 0 (including its embedded self-test); `./build/MoveBreak --self-test`
+exited 0 with **5 suites, 934 cases, 0 failures**: detection 80, security 116, persistence 506,
+update 104, groundwork 128. The change adds six security cases and one update case (the
+hostile-path matrix, which aggregates 21 command checks) and does not alter runtime code, weaken assertions or touch production
+Keychain items, preferences, history or live endpoints. Dependency scan: no third-party
+runtime dependency (CommandLineTools `swiftc` and system frameworks only), enforced by the
+security-surface gate. Findings F1 and F2 are reported for conductor triage; no issue was opened.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64

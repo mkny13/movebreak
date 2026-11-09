@@ -593,6 +593,40 @@ enum SecuritySelfTests {
             reporter.check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)
         }
 
+        // 5. Diagnostic URL redaction: credentials, deep path, query and fragment never reach output.
+        let urlSentinels = ["SENTINEL_USER", "SENTINEL_PASS", "SENTINEL_DEEP_PATH", "SENTINEL_QUERY", "SENTINEL_FRAGMENT"]
+        let urlCases: [(name: String, input: String, expected: String)] = [
+            ("userinfo, deep path, query and fragment",
+             "https://SENTINEL_USER:SENTINEL_PASS@example.com:8443/public/SENTINEL_DEEP_PATH/x?token=SENTINEL_QUERY#SENTINEL_FRAGMENT",
+             "example.com/public/…"),
+            ("single segment with query and fragment",
+             "https://example.com/public?token=SENTINEL_QUERY#SENTINEL_FRAGMENT",
+             "example.com/public"),
+            ("scheme-less input with userinfo and query",
+             "SENTINEL_USER:SENTINEL_PASS@example.com/public/SENTINEL_DEEP_PATH?k=SENTINEL_QUERY",
+             "example.com/public/…"),
+            ("host-only with fragment",
+             "https://example.com#SENTINEL_FRAGMENT",
+             "example.com"),
+            ("percent-encoded deep path",
+             "https://example.com/public/SENTINEL%5FDEEP_PATH%2Fx?a=SENTINEL_QUERY",
+             "example.com/public/…"),
+        ]
+        for testCase in urlCases {
+            let output = URLDisplay.sanitize(testCase.input)
+            let leaked = urlSentinels.filter { output.contains($0) }
+            reporter.check(
+                "diagnostic URL redaction (\(testCase.name)) omits credentials, deep path, query and fragment",
+                passed: leaked.isEmpty && output == testCase.expected,
+                detail: "output=\(output), leaked=\(leaked)"
+            )
+        }
+        // Documented limitation: the first path segment is intentionally retained, so it must never carry secrets.
+        reporter.check(
+            "diagnostic URL redaction retains only the first path segment (documented limitation)",
+            passed: URLDisplay.sanitize("https://example.com/SENTINEL_FIRST_SEGMENT/rest") == "example.com/SENTINEL_FIRST_SEGMENT/…"
+        )
+
         return reporter.failureCount
     }
 

@@ -710,6 +710,42 @@ enum UpdateSelfTests {
                 == ["-d", "-r", "-s", "com.apple.quarantine", "--", hostileBundleURL.path]
         )
 
+        let hostileNames = [
+            "has space", "-leading-hyphen", "--", "quote'single", "quote\"double",
+            "new\nline", "meta;&|<>$(x)`y`*?~#\\",
+        ]
+        var matrixFailures: [String] = []
+        for name in hostileNames {
+            let archive = tempFixtureDir.appendingPathComponent(name + ".zip")
+            let destination = tempFixtureDir.appendingPathComponent(name, isDirectory: true)
+            let bundle = destination.appendingPathComponent(name + ".app")
+            let commands: [(UpdateToolCommand, String, [String])] = [
+                (.extractArchive(archive: archive, destination: destination), "/usr/bin/ditto",
+                 ["-x", "-k", "--", archive.path, destination.path]),
+                (.verifyCodeSignature(bundle: bundle), "/usr/bin/codesign",
+                 ["--verify", "--deep", "--strict", "--", bundle.path]),
+                (.removeQuarantine(bundle: bundle), "/usr/bin/xattr",
+                 ["-d", "-r", "-s", "com.apple.quarantine", "--", bundle.path]),
+            ]
+            for (command, executable, arguments) in commands {
+                let invocation = command.invocation
+                let separator = invocation.arguments.firstIndex(of: "--")
+                let pathCount = arguments.count - ((separator ?? -1) + 1)
+                let ok = invocation.executable == executable
+                    && invocation.arguments == arguments
+                    && invocation.environment.isEmpty
+                    && separator != nil
+                    && invocation.arguments.count == (separator ?? 0) + 1 + pathCount
+                    && invocation.arguments[((separator ?? 0) + 1)...].allSatisfy { $0.hasPrefix(tempFixtureDir.path) }
+                if !ok { matrixFailures.append("\(executable) <\(name.debugDescription)>") }
+            }
+        }
+        reporter.check(
+            "hostile-path matrix keeps fixed executables, argument boundaries and empty environments for all update commands",
+            passed: matrixFailures.isEmpty,
+            detail: matrixFailures.joined(separator: "; ")
+        )
+
         // 7. Staging Directory Permissions (0700)
         let stagingDir = tempFixtureDir.appendingPathComponent("staging", isDirectory: true)
         do {
