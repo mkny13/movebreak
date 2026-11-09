@@ -406,6 +406,47 @@ according to the recorded comparison. No manual checks or unsupported criteria r
 for this bounded offline verification. Live Groundwork, GUI interaction and release
 deployment were not exercised; the conductor owns shipping and post-merge evidence.
 
+### Runtime boundary audit #126/#127
+
+Audited on 2026-11-09 UTC for [#127](https://github.com/mkny13/movebreak/issues/127) (part of
+[#126](https://github.com/mkny13/movebreak/issues/126)) against source revision
+`79f84b046fba594a7964d6aaa931d9abc6fa71af` plus this change. The historical #72 evidence above is
+preserved unchanged. This is an offline audit using fake credentials, temporary data and injected
+transports; no production Keychain item, preference, history or live endpoint was read. It reports
+results for the reviewed revision and does not claim the product is free of vulnerabilities.
+"Unpooled URLs" is read as `URLSession` lifetime/reuse (correctness, not performance) plus outbound
+origin validation; "denial lists" as `ignoredApps` precedence and explicit rejection of unsupported
+browser targets. No generic remote deny-list service exists or is proposed.
+
+| Row | Source symbols and named tests | Result | Limitations |
+|---|---|---|---|
+| Credential input, storage, redaction | `SecretInput.readSecret` (no echo, stdin only), `Keychain` origin-bound accounts, `GroundworkSetup.execute`/`validateBaseURL`. `SecuritySelfTests.runSecretRedactionCases` (PTY echo suppression, KeychainError descriptions), `GroundworkSelfTests.runSetupCases`/`runBoundaryCases`. | Pass. No `.env` loader exists (the security gate rejects environment files); tokens never reach argv, preferences or errors in fixtures. | The "CLI argument rejected" loop in `runSecretRedactionCases` asserts a prefix check on its own literals, not production parsing (finding F1). Fake Keychain only. |
+| URL origin, redirect, session reuse | `GroundworkOrigin`, `GroundworkClient.authorizedRequest`, `GroundworkURLSessionTransport.redirectedRequest` (ephemeral session created on first send, `invalidateAndCancel` on teardown). `GroundworkSelfTests.runBoundaryCases`, `runTransportLifetimeCases`. Diagnostic URLs: `URLDisplay.sanitize` with new table-driven `runSecretRedactionCases` fixture (userinfo, query, fragment, port, deep-path sentinels). | Pass for HTTPS-or-loopback, exact origin, cross-origin/downgrade redirect refusal and bounded session lifetime. Diagnostics: pass for userinfo/query/fragment/port/deep path. | `URLDisplay.sanitize` keeps the first path segment by design (finding F2). Stub `URLProtocol`, no live server. |
+| Private files, link defenses | `PrivateFileStore.protect/openFile/append/replace` backing `SessionLogger`, `GroundworkOutbox`, `GroundworkRoutineCache`. `PersistenceSelfTests.runPermissionCases`, `runFileBoundaryCases`, `runDescriptorLifetimeCases`; `GroundworkSelfTests.runCacheCases`. | Pass: 0700/0600 modes, symlink, hard-link, FIFO and directory rejection, descriptor stability. | Same-user processes and root can still read the files; temporary directories only. |
+| Updater trust, process arguments/environment | `UpdateToolCommand.invocation` (fixed `/usr/bin/ditto`, `codesign`, `xattr`; `--` before paths; empty environment), `Updater`, `UpdateSecurity`, `UpdateValidation`. `UpdateSelfTests.runUpdateTrustCases` section 6 plus new 6b hostile-path matrix: ten names (space, leading hyphen, `--version`, quote, newline, `;`, `$()`, backtick, `|&><*?[]`, `~$HOME`) times all three commands assert exact executable, argument boundaries and empty environment without running them. | Pass. No shell is involved; `Process` receives an argv array. | Command construction is asserted, not executed; no signed-release installation was exercised. |
+| Browser allowlist, ignored-app precedence | `BrowserTabInspector.Dialect(bundleID:)`/`isBrowserSupported` (fixed per-dialect AppleScript, no interpolation of bundle IDs or URLs), `SessionDetector` filtering via `BundleIdentity.belongs(_, to: ignoredApps)`, `Preferences`. `SecuritySelfTests.runIgnoredAppsPrecedenceCases`, `runUnsupportedBrowserCases`, `runHostBoundaryCases`. | Pass: unsupported browsers return `.unknown` without running a script; ignored apps win. | Behavior of real browsers and Automation grants is not exercised. |
+| Same-user remote commands, Automation | `RemoteControl.Command` (`show`, `quit`, `pause`) over `DistributedNotificationCenter`; `NSAppleEventsUsageDescription` in `Resources/Info.plist`. Inspected only; no dedicated test. | Limited: same-user trust boundary, no new privilege. | Any same-user process can post these three notifications (finding F3). Automation consent is prompted by macOS and was not triggered. |
+
+Findings (none block this audit; remediation is proposed for conductor triage, not implemented):
+
+- **F1, low, test quality.** Reproducer: read `runSecretRedactionCases` section 4; each flag passes
+  because `flag.hasPrefix(...)` is evaluated on the literal itself. Boundary: CLI secret-argument
+  rejection. Fix: call the production argument parser and assert it exits non-zero, or delete the claim.
+- **F2, low, diagnostic privacy.** Reproducer: `URLDisplay.sanitize("https://example.test/SENTINEL/x")`
+  returns `example.test/SENTINEL/…`. A secret placed in the first path segment (for example a capability
+  URL) would appear in `--diagnose` output and session reasons. Fix: default to host only, or add the
+  first segment only for an allowlisted video-site host set.
+- **F3, info, same-user IPC.** Reproducer: `DistributedNotificationCenter` post of
+  `com.mike.movebreak.quit` from any same-user process quits the app. Impact is availability only.
+  Fix, if desired: none required; document as accepted, or drop `quit`/`pause` from the notification
+  surface.
+
+Commands (from the repository root, revision above): `./scripts/check_security_surface.sh --self-test`
+exited 0 (20 PASS lines); `./scripts/build_app.sh` exited 0; `./build/MoveBreak --self-test` exited 0
+with **5 suites, 964 cases, 0 failures in 7.291s**: detection 80, security 117, persistence 506,
+update 133, groundwork 128. The new cases are security +7 (six redaction fixtures plus the verbose
+contrast) and update +30 (ten names times three commands). No existing assertion was changed.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
