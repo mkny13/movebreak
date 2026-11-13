@@ -408,9 +408,9 @@ deployment were not exercised; the conductor owns shipping and post-merge eviden
 
 ### Runtime boundary audit #126/#127
 
-Audited on 2026-11-09 UTC for [#127](https://github.com/mkny13/movebreak/issues/127) (part of
+Audited on 2026-11-13 UTC for [#127](https://github.com/mkny13/movebreak/issues/127) (part of
 [#126](https://github.com/mkny13/movebreak/issues/126)) against source revision
-`79f84b046fba594a7964d6aaa931d9abc6fa71af` plus this change. The historical #72 evidence above is
+`dea1ed83c7cf7c947a3b7981e0293506c56deea4` plus this report-only change. The historical #72 evidence above is
 preserved unchanged. This is an offline audit using fake credentials, temporary data and injected
 transports; no production Keychain item, preference, history or live endpoint was read. It reports
 results for the reviewed revision and does not claim the product is free of vulnerabilities.
@@ -443,9 +443,16 @@ Findings (none block this audit; remediation is proposed for conductor triage, n
 
 Commands (from the repository root, revision above): `./scripts/check_security_surface.sh --self-test`
 exited 0 (20 PASS lines); `./scripts/build_app.sh` exited 0; `./build/MoveBreak --self-test` exited 0
-with **5 suites, 964 cases, 0 failures in 7.291s**: detection 80, security 117, persistence 506,
-update 133, groundwork 128. The new cases are security +7 (six redaction fixtures plus the verbose
-contrast) and update +30 (ten names times three commands). No existing assertion was changed.
+with **5 suites, 964 cases, 0 failures in 7.449s**: detection 80 (0.007s), security 117 (0.693s),
+persistence 506 (1.653s), update 133 (4.955s), groundwork 128 (0.141s). The new cases are
+security +7 (six redaction fixtures plus the verbose contrast) and update +30 (ten names times
+three commands). The test-only defaults cleanup assertion accepts either an absent or empty
+persistent domain; `removePersistentDomain` returned an empty dictionary on the local macOS
+27.2.1 / Swift 6.4.2 runner. The first local build therefore failed three cleanup assertions;
+after the portability correction, all three commands above passed. The PR's only observed CI run,
+42582537056, was cancelled before any job steps and provided no failing log; the latest successful
+main `verify` run was 41866482308 on the same `macos-14` workflow label. This audit records local
+verification and does not claim a new PR CI pass.
 
 ## Build and test structure
 
