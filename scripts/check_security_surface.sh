@@ -15,8 +15,8 @@ import tempfile
 # an incomplete parser. Any semantic or cosmetic edit requires explicit review.
 APPROVED = {
     '.claude/hooks/guard_build_artifacts.py': 'b7f9feb1a7228d76dc2050c6610272190f5a4d4912888629a2f38e4f98e144f4',
-    '.github/workflows/build.yml': '9dab86a388a55c6926c1acd089b4a03e86c3366a1748458d4189c3b668863de1',
-    '.github/workflows/release.yml': 'bfdc6704ae0582c2588ce7142006280fc13d3ab265b919bf58b5aa9f6b0d9653',
+    '.github/workflows/build.yml': '099707550d923a5ac730d69ab76bcb20f13b257301ea0802a45587cfe2631b56',
+    '.github/workflows/release.yml': '33e509c1b410478904474726d27b84bb8380d27fd361ebcadfd97bdc90a87243',
     '.github/dependabot.yml': '081d6f1bfe9f08a3a2cbf3f10355381b50f0e78dc3c640761249910adc464096',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
@@ -190,7 +190,7 @@ def workflow_self_test_fixtures(root):
 
     # continue-on-error at job level and on the build step
     for label, old, new in (
-            ('job', '    runs-on: macos-14\n', '    runs-on: macos-14\n    continue-on-error: true\n'),
+            ('job', '    runs-on: macos-15\n', '    runs-on: macos-15\n    continue-on-error: true\n'),
             ('build step', '        run: ./scripts/build_app.sh\n',
              '        continue-on-error: true\n        run: ./scripts/build_app.sh\n')):
         assert old in verify, label
