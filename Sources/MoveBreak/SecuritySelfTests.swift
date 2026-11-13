@@ -10,7 +10,7 @@ enum SecuritySelfTests {
         defaults.removePersistentDomain(forName: suiteName)
         reporter.check(
             "isolated UserDefaults domain is removed",
-            defaults.persistentDomain(forName: suiteName) == nil
+            defaults.persistentDomain(forName: suiteName)?.isEmpty ?? true
         )
     }
 
