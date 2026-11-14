@@ -626,6 +626,21 @@ enum SecuritySelfTests {
             "verbose URL display is the only path that preserves the full URL",
             passed: URLDisplay.sanitize("https://example.test/a?q=SENTINEL_QUERY", verbose: true) == "https://example.test/a?q=SENTINEL_QUERY"
         )
+        reporter.check(
+            "URLDisplay.sanitize(nil) emits the none marker",
+            expected: "‹none›",
+            actual: URLDisplay.sanitize(nil, verbose: false)
+        )
+        reporter.check(
+            "URLDisplay.sanitize(\"\") emits the none marker",
+            expected: "‹none›",
+            actual: URLDisplay.sanitize("", verbose: false)
+        )
+        reporter.check(
+            "URLDisplay.sanitize(\"%%%\") emits the unparseable marker",
+            expected: "‹unparseable›",
+            actual: URLDisplay.sanitize("%%%", verbose: false)
+        )
 
         return reporter.failureCount
     }
