@@ -372,6 +372,27 @@ production Keychain access, GUI interaction, certificate-signed release installa
 post-merge evidence were not exercised or claimed; the conductor owns shipping and
 post-merge tracking. The evidence change does not alter runtime code, tests or limits.
 
+### Tooling security audit #128
+
+Audited 2026-11-13 against base revision `79f84b0` plus this change (macOS 27.2.1). Scope is
+offline: file inventory, imports and configuration inspection. No local secret file was read, no
+credentialed release ran, and no online vulnerability-database scan was performed, so this is a
+drift/inventory audit and **not** CVE clearance.
+
+| Area | Reviewed files | Evidence | Result |
+|---|---|---|---|
+| Environment/secret-file exclusion | `scripts/check_security_surface.sh` (`METADATA`, `check`), `.gitignore` | New temp-repo fixtures with synthetic bytes: root `.env`, nested `.env.local`, ignored `.env.production` (via `.git/info/exclude`), tracked `.env.test`; each asserts its actual Git state and rejection by the environment-file rule, then a clean fixture passes. | Pass. Finding (low): repo `.gitignore` has no `.env*` entry; the gate rejects such files in the working tree, but a stray `.env` could still be committed if the gate is skipped. Proposed: add `.env*` to `.gitignore`. |
+| Subprocess argument boundaries | `scripts/*.sh`, `.claude/hooks/guard_build_artifacts.py`, the gate's Python | The only Python `subprocess.run`/`check_output` calls are in the gate, use list arguments, no `shell=True`, and only fixed `git`/`bash` plus temp paths; the hook runs no subprocess. Shell scripts are hash-pinned. | Pass. |
+| Allowlists and denial cases | gate `SWIFT_PRIMITIVES`, `APPROVED`, existing negative fixtures | Added process primitives, untracked Swift, runtime imports, download-to-shell and mutable Actions are rejected. Limited: the gate file itself is exempt from `APPROVED` (it is the verifier) and is protected only by review; the build-artifact hook is advisory and fail-open (any error exits 0), not an authorization boundary. | Pass with limits. |
+| Workflow permissions and release secrets | `.github/workflows/build.yml`, `release.yml` | `contents: read` by default; `contents: write` only in the release job; `MACOS_CERT_P12`/`MACOS_CERT_PASSWORD` referenced only in release steps. Configuration inspected only; no secret values obtained. | Pass. |
+| Dependency inventory and pinned Actions | `Sources/MoveBreak/*.swift` imports, `Resources/Info.plist`, `dependabot.yml` | Runtime frameworks: AppKit, SwiftUI, Foundation, CoreAudio, Security, CryptoKit, Darwin; no third-party runtime dependency or manifest. Two Action pins: `actions/checkout@3d3c42e5...` and `softprops/action-gh-release@efb35369...` (full SHAs); Dependabot covers `github-actions` weekly. | Pass (offline inventory only). |
+
+Verification at `79f84b0` plus this change: `./scripts/check_security_surface.sh --self-test`
+exit 0 (25 PASS lines), `./scripts/build_app.sh` exit 0, `./build/MoveBreak --self-test` exit 0
+(5 suites, 927 cases, 0 failures). Incidental fix: the "isolated UserDefaults domain is removed"
+self-test failed 3 times on macOS 27 because `persistentDomain(forName:)` returns an empty
+dictionary rather than nil after removal; the check now accepts nil or empty.
+
 ### Health pass #113 verification
 
 Verified on 2026-10-26 UTC (2026-10-25 America/New_York) for
