@@ -442,7 +442,7 @@ browser targets. No generic remote deny-list service exists or is proposed.
 | Row | Source symbols and named tests | Result | Limitations |
 |---|---|---|---|
 | Credential input, storage, redaction | `SecretInput.readSecret` (no echo, stdin only), `Keychain` origin-bound accounts, `GroundworkSetup.execute`/`validateBaseURL`. `SecuritySelfTests.runSecretRedactionCases` (PTY echo suppression, KeychainError descriptions), `GroundworkSelfTests.runSetupCases`/`runBoundaryCases`. | Pass. No `.env` loader exists (the security gate rejects environment files); tokens never reach argv, preferences or errors in fixtures. | The "CLI argument rejected" loop in `runSecretRedactionCases` asserts a prefix check on its own literals, not production parsing (finding F1). Fake Keychain only. |
-| URL origin, redirect, session reuse | `GroundworkOrigin`, `GroundworkClient.authorizedRequest`, `GroundworkURLSessionTransport.redirectedRequest` (ephemeral session created on first send, `invalidateAndCancel` on teardown). `GroundworkSelfTests.runBoundaryCases`, `runTransportLifetimeCases`. Diagnostic URLs: `URLDisplay.sanitize` with new table-driven `runSecretRedactionCases` fixture (userinfo, query, fragment, port, deep-path sentinels). | Pass for HTTPS-or-loopback, exact origin, cross-origin/downgrade redirect refusal and bounded session lifetime. Diagnostics: pass for userinfo/query/fragment/port/deep path. | `URLDisplay.sanitize` keeps the first path segment by design (finding F2). Stub `URLProtocol`, no live server. |
+| URL origin, redirect, session reuse | `GroundworkOrigin`, `GroundworkClient.authorizedRequest`, `GroundworkURLSessionTransport.redirectedRequest` (ephemeral session created on first send, `invalidateAndCancel` on teardown). `GroundworkSelfTests.runBoundaryCases`, `runTransportLifetimeCases`. Diagnostic URLs: `URLDisplay.sanitize` with new table-driven `runSecretRedactionCases` fixture (userinfo, query, fragment, port, deep-path sentinels). | Pass for HTTPS-or-loopback, exact origin, cross-origin/downgrade redirect refusal and bounded session lifetime. Diagnostics: pass for userinfo/query/fragment/port/deep path. | Default output is host-only (F2 resolved); full URLs appear only with explicit `--verbose`. Stub `URLProtocol`, no live server. |
 | Private files, link defenses | `PrivateFileStore.protect/openFile/append/replace` backing `SessionLogger`, `GroundworkOutbox`, `GroundworkRoutineCache`. `PersistenceSelfTests.runPermissionCases`, `runFileBoundaryCases`, `runDescriptorLifetimeCases`; `GroundworkSelfTests.runCacheCases`. | Pass: 0700/0600 modes, symlink, hard-link, FIFO and directory rejection, descriptor stability. | Same-user processes and root can still read the files; temporary directories only. |
 | Updater trust, process arguments/environment | `UpdateToolCommand.invocation` (fixed `/usr/bin/ditto`, `codesign`, `xattr`; `--` before paths; empty environment), `Updater`, `UpdateSecurity`, `UpdateValidation`. `UpdateSelfTests.runUpdateTrustCases` section 6 plus new 6b hostile-path matrix: ten names (space, leading hyphen, `--version`, quote, newline, `;`, `$()`, backtick, `|&><*?[]`, `~$HOME`) times all three commands assert exact executable, argument boundaries and empty environment without running them. | Pass. No shell is involved; `Process` receives an argv array. | Command construction is asserted, not executed; no signed-release installation was exercised. |
 | Browser allowlist, ignored-app precedence | `BrowserTabInspector.Dialect(bundleID:)`/`isBrowserSupported` (fixed per-dialect AppleScript, no interpolation of bundle IDs or URLs), `SessionDetector` filtering via `BundleIdentity.belongs(_, to: ignoredApps)`, `Preferences`. `SecuritySelfTests.runIgnoredAppsPrecedenceCases`, `runUnsupportedBrowserCases`, `runHostBoundaryCases`. | Pass: unsupported browsers return `.unknown` without running a script; ignored apps win. | Behavior of real browsers and Automation grants is not exercised. |
@@ -453,10 +453,11 @@ Findings (none block this audit; remediation is proposed for conductor triage, n
 - **F1, low, test quality.** Reproducer: read `runSecretRedactionCases` section 4; each flag passes
   because `flag.hasPrefix(...)` is evaluated on the literal itself. Boundary: CLI secret-argument
   rejection. Fix: call the production argument parser and assert it exits non-zero, or delete the claim.
-- **F2, low, diagnostic privacy.** Reproducer: `URLDisplay.sanitize("https://example.test/SENTINEL/x")`
+- **F2, low, diagnostic privacy. Resolved:** `URLDisplay.sanitize` now returns the host only; the only
+  remaining disclosure is the explicit `--verbose` opt-in. Original reproducer: `URLDisplay.sanitize("https://example.test/SENTINEL/x")`
   returns `example.test/SENTINEL/…`. A secret placed in the first path segment (for example a capability
-  URL) would appear in `--diagnose` output and session reasons. Fix: default to host only, or add the
-  first segment only for an allowlisted video-site host set.
+  URL) would appear in `--diagnose` output and session reasons. Fix applied: default to host only (no
+  allowlist).
 - **F3, info, same-user IPC.** Reproducer: `DistributedNotificationCenter` post of
   `com.mike.movebreak.quit` from any same-user process quits the app. Impact is availability only.
   Fix, if desired: none required; document as accepted, or drop `quit`/`pause` from the notification
@@ -523,7 +524,7 @@ Each tracked Swift source appears exactly once below.
 | [`SessionDetector.swift`](Sources/MoveBreak/SessionDetector.swift) | Applies three-stage classification plus debounce, cooldown, and session lifecycle policy. |
 | [`Diagnose.swift`](Sources/MoveBreak/Diagnose.swift) | Runs the live audio/tab/classification diagnostic table. |
 | [`TabProbe.swift`](Sources/MoveBreak/TabProbe.swift) | Runs one-shot inspection of supported running browsers. |
-| [`URLDisplay.swift`](Sources/MoveBreak/URLDisplay.swift) | Sanitizes diagnostic URLs to privacy-preserving display strings. |
+| [`URLDisplay.swift`](Sources/MoveBreak/URLDisplay.swift) | Sanitizes diagnostic URLs to host-only display strings by default (full URL only with `verbose`). |
 | [`Preferences.swift`](Sources/MoveBreak/Preferences.swift) | Owns validated detection/timing overrides plus non-secret Groundwork preferences. |
 
 ### Routine domain and UI

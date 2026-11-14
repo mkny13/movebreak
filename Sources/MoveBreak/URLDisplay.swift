@@ -1,11 +1,11 @@
 import Foundation
 
 /// Privacy-preserving URL formatter for logs, console diagnostics, and probe output.
-/// Keeps host-level output by default to prevent accidental leakage of sensitive tokens
-/// or browsing history, requiring explicit verbose mode for full URLs.
+/// Output is host-only by default; path, port, userinfo, query and fragment appear
+/// only with explicit `verbose`, which returns the full URL.
 enum URLDisplay {
 
-    /// Formats a URL for display: host + first path segment by default, or the full URL
+    /// Formats a URL for display: host only by default, or the full URL
     /// when `verbose` is true.
     static func sanitize(_ url: String?, verbose: Bool = false) -> String {
         guard let url, !url.isEmpty else { return "‹none›" }
@@ -17,9 +17,6 @@ enum URLDisplay {
             return "‹unparseable›"
         }
 
-        let segments = components.path.split(separator: "/")
-        let firstSegment = segments.first.map { "/\($0)" } ?? ""
-        let ellipsis = segments.count > 1 ? "/…" : ""
-        return host + firstSegment + ellipsis
+        return host
     }
 }
