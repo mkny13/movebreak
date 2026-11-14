@@ -2,11 +2,9 @@ import AppKit
 import Foundation
 
 let rawArguments = CommandLine.arguments.dropFirst()
-for arg in rawArguments {
-    if arg.hasPrefix("--token") || arg.hasPrefix("--secret") || arg.hasPrefix("--notion-token") || arg.hasPrefix("--groundwork-token") || arg.hasPrefix("--api-key") {
-        FileHandle.standardError.write(Data("error: secrets must not be provided via command-line arguments. Use an interactive configure command.\n".utf8))
-        exit(1)
-    }
+if !validateNoSecretArguments(rawArguments) {
+    FileHandle.standardError.write(Data("error: secrets must not be provided via command-line arguments. Use an interactive configure command.\n".utf8))
+    exit(1)
 }
 let arguments = Set(rawArguments)
 

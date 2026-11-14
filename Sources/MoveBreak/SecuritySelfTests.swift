@@ -589,9 +589,11 @@ enum SecuritySelfTests {
         // 4. CLI Argument check: verify rejection of secret argument flags
         let forbiddenFlags = ["--token", "--token=example", "--secret", "--notion-token", "--groundwork-token", "--api-key"]
         for flag in forbiddenFlags {
-            let isRejected = flag.hasPrefix("--token") || flag.hasPrefix("--secret") || flag.hasPrefix("--notion-token") || flag.hasPrefix("--groundwork-token") || flag.hasPrefix("--api-key")
+            let isRejected = !validateNoSecretArguments(["--help", flag])
             reporter.check("CLI argument '\(flag)' rejected from process arguments", passed: isRejected)
         }
+
+        reporter.check("benign CLI arguments accepted by production validator", passed: validateNoSecretArguments(["--help", "--diagnose", "--verbose", "--self-test"]))
 
         // 5. Diagnostic URL redaction: synthetic credentials, query, fragment and deep-path
         // sentinels must never reach default (non-verbose) diagnostics. Output is host-only.
