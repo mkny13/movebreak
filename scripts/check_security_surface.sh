@@ -285,6 +285,40 @@ def fixtures():
                 else:
                     path.write_text(original)
         check(fixture)
+        # Environment-file rejection fixtures: synthetic non-secret bytes, temporary repo only.
+        (fixture / '.git/info/exclude').open('a').write('\n.env.production\n')
+        for label, name, state in (
+                ('root .env', '.env', 'untracked'),
+                ('nested .env.local', 'nested/.env.local', 'untracked'),
+                ('ignored .env.production', '.env.production', 'ignored'),
+                ('tracked .env.test', '.env.test', 'tracked')):
+            path = fixture / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('SYNTHETIC_PLACEHOLDER=not-a-secret\n')
+            try:
+                if state == 'tracked':
+                    subprocess.run(['git', '-C', str(fixture), 'add', '-f', name], check=True)
+                listed = name in git(fixture, 'ls-files', '-z').decode().split('\0')
+                ignored = subprocess.run(['git', '-C', str(fixture), 'check-ignore', '-q', name]).returncode == 0
+                assert listed == (state == 'tracked'), f'{label}: unexpected tracked state'
+                assert ignored == (state == 'ignored'), f'{label}: unexpected ignored state'
+                try:
+                    check(fixture)
+                except ValueError as error:
+                    if f'{name}: unexpected dependency metadata or environment file' not in str(error):
+                        raise AssertionError(f'{label}: failed for wrong reason: {error}')
+                    print(f'PASS: rejects environment file fixture ({label}, {state})')
+                else:
+                    raise AssertionError(f'{label}: gate accepted environment file')
+            finally:
+                if state == 'tracked':
+                    subprocess.run(['git', '-C', str(fixture), 'rm', '-q', '-f', '--cached', name], check=True)
+                path.unlink()
+                while path.parent != fixture and not any(path.parent.iterdir()):
+                    path.parent.rmdir()
+                    path = path.parent
+        check(fixture)
+        print('PASS: clean fixture passes after environment-file cleanup')
 
 try:
     if sys.argv[1:] == ['--self-test']:
