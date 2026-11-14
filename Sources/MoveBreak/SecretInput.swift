@@ -93,3 +93,10 @@ enum SecretInput {
         }
     }
 }
+
+/// Returns `false` when any argument looks like a secret-bearing flag. Shared by
+/// `main.swift` (production rejection) and the security self-tests.
+func validateNoSecretArguments<S: Sequence>(_ arguments: S) -> Bool where S.Element == String {
+    let forbiddenPrefixes = ["--token", "--secret", "--notion-token", "--groundwork-token", "--api-key"]
+    return !arguments.contains { arg in forbiddenPrefixes.contains { arg.hasPrefix($0) } }
+}
