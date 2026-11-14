@@ -386,7 +386,7 @@ enum DetectionSelfTests {
         let safari = "com.apple.Safari"
         let chrome = "com.google.Chrome"
         let videoURL = "https://www.youtube.com/watch?v=cross-browser"
-        let meetingURL = "https://meet.google.com"
+        let meetingURL = "https://meet.google.com/abc-defg-hij"
 
         func inspection(bundleID: String, verdict: TabVerdict, reason: String) -> TabInspection {
             TabInspection(
@@ -585,19 +585,19 @@ enum DetectionSelfTests {
             // Browser calls. Chrome releases the mic stream when a Meet call is muted, so
             // the stage-1 mic signal disappears and only the URL identifies the call.
             Case(name: "Google Meet in the active tab → meeting",
-                 activeURL: "https://meet.google.com",
+                 activeURL: "https://meet.google.com/abc-defg-hij",
                  allURLs: [], expectMeeting: true),
 
             Case(name: "Meet in a background window → meeting",
                  activeURL: "https://mail.google.com/",
-                 allURLs: ["https://meet.google.com",
+                 allURLs: ["https://meet.google.com/abc-defg-hij",
                            "https://mail.google.com/"],
                  expectMeeting: true),
 
             Case(name: "Meet call outranks a music tab (muted Meet + phish.in)",
                  activeURL: "https://mail.google.com/",
                  allURLs: ["https://relisten.net/phish/1997/11/17",
-                           "https://meet.google.com",
+                           "https://meet.google.com/abc-defg-hij",
                            "https://mail.google.com/"],
                  expectMeeting: true),
 
