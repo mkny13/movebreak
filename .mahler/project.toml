@@ -10,7 +10,7 @@ rollback = "Install the previous signed MoveBreak.app.zip from GitHub Releases. 
 
 [environments]
 production = "The user's certificate-signed MoveBreak.app, local com.mike.movebreak UserDefaults, Application Support files, origin-bound Keychain credential, and configured Groundwork production origin."
-ci = "An ephemeral macos-14 GitHub Actions runner using an ad-hoc signature for pull requests and main pushes; self-tests use temporary files, isolated UserDefaults suites, mock Keychain backends, and injected transports."
+ci = "An ephemeral macos-15 GitHub Actions runner using an ad-hoc signature for pull requests and main pushes; self-tests use temporary files, isolated UserDefaults suites, mock Keychain backends, and injected transports."
 isolation = "CI has no production signing credential, user preferences, Application Support directory, Keychain token, or live Groundwork access. Release signing secrets exist only in the tag-gated release job's temporary keychain."
 
 [data]
