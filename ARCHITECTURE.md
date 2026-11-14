@@ -476,6 +476,30 @@ after the portability correction, all three commands above passed. The PR's only
 main `verify` run was 41866482308 on the same `macos-14` workflow label. This audit records local
 verification and does not claim a new PR CI pass.
 
+### Combined verification #126/#135
+
+Verified 2026-11-14 on a clean tree at revision `88a7f7a00fe6fa2034d7ccdce601947e785105dc`
+(`main` containing both successors). Evidence-only; no audit, runtime or test code changed.
+
+- [#127](https://github.com/mkny13/movebreak/issues/127) was delivered by merged PR #129 at
+  `eb7d003f516e7bfe2e85773b9f8001be14c95b17`; [#128](https://github.com/mkny13/movebreak/issues/128)
+  by merged PR #130 at `09cf89659df789ff6b1842bfe8ebcd930afc342b`. `git merge-base --is-ancestor`
+  of each commit against the revision exited 0 and 0.
+- Parent criteria 1-2 map to existing artifacts (not duplicated): the six rows, F1-F3, the URL
+  redaction fixture (`runSecretRedactionCases`) and the ten-name times three-command hostile-path
+  matrix (`runUpdateTrustCases` 6b) in "Runtime boundary audit #126/#127"; the five rows and the root,
+  nested, ignored and tracked environment-file fixtures in "Tooling security audit #128".
+- Commands, run sequentially from the repository root: `./scripts/check_security_surface.sh --self-test`
+  exit 0 (25 PASS lines); `./scripts/build_app.sh` exit 0; `./build/MoveBreak --self-test` exit 0
+  with **5 suites, 967 cases, 0 failures in 7.554s**.
+- Confirmed findings: runtime F1 (low, CLI secret-argument test asserts its own literals), F3 (info,
+  same-user notification IPC availability) and tooling low gap (no `.env*` in `.gitignore`); each has
+  a safe offline reproducer and proposed remediation in its section. F2 is resolved. Passing
+  controls: all other rows marked Pass. Unverified limitations: offline inventory, injected
+  transports, command-construction assertions and configuration inspection do not verify live
+  services, real Keychain behavior, Automation grants, a signed-release installation, release
+  publication or current CVE clearance.
+
 ## Build and test structure
 
 `scripts/build_app.sh` compiles the tracked, documented Swift inventory directly with `swiftc`, targeting arm64
