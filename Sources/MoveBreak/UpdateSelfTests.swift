@@ -710,6 +710,40 @@ enum UpdateSelfTests {
                 == ["-d", "-r", "-s", "com.apple.quarantine", "--", hostileBundleURL.path]
         )
 
+        // 6b. Hostile-path matrix: every command case keeps the fixed executable, a single
+        // argument per path after "--", and an empty environment. Nothing is executed.
+        let hostileNames = [
+            "with space", "-leading-hyphen", "--version", "quote'\"name", "new\nline",
+            "semi;colon", "$(touch injected)", "`touch injected`", "a|b&c>d<e*?[x]", "tilde~$HOME",
+        ]
+        for name in hostileNames {
+            let archive = tempFixtureDir.appendingPathComponent(name + ".zip")
+            let destination = tempFixtureDir.appendingPathComponent("dest " + name, isDirectory: true)
+            let bundle = tempFixtureDir.appendingPathComponent(name + ".app", isDirectory: true)
+            let matrix: [(UpdateToolCommand, String, [String])] = [
+                (.extractArchive(archive: archive, destination: destination), "/usr/bin/ditto",
+                 ["-x", "-k", "--", archive.path, destination.path]),
+                (.verifyCodeSignature(bundle: bundle), "/usr/bin/codesign",
+                 ["--verify", "--deep", "--strict", "--", bundle.path]),
+                (.removeQuarantine(bundle: bundle), "/usr/bin/xattr",
+                 ["-d", "-r", "-s", "com.apple.quarantine", "--", bundle.path]),
+            ]
+            for (command, executable, arguments) in matrix {
+                let invocation = command.invocation
+                let separator = invocation.arguments.firstIndex(of: "--")
+                let pathArguments = separator.map { Array(invocation.arguments[($0 + 1)...]) } ?? []
+                let pathsAreOpaque = !pathArguments.isEmpty && pathArguments.allSatisfy { $0.hasPrefix("/") }
+                reporter.check(
+                    "hostile path \(name.debugDescription) stays one argument for \(executable)",
+                    passed: invocation.executable == executable
+                        && invocation.arguments == arguments
+                        && invocation.environment.isEmpty
+                        && pathsAreOpaque,
+                    detail: "\(invocation.arguments)"
+                )
+            }
+        }
+
         // 7. Staging Directory Permissions (0700)
         let stagingDir = tempFixtureDir.appendingPathComponent("staging", isDirectory: true)
         do {
