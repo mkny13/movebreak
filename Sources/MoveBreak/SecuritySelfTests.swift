@@ -594,27 +594,28 @@ enum SecuritySelfTests {
         }
 
         // 5. Diagnostic URL redaction: synthetic credentials, query, fragment and deep-path
-        // sentinels must never reach default (non-verbose) diagnostics. Only host plus the
-        // first path segment is retained by design (a documented limitation).
+        // sentinels must never reach default (non-verbose) diagnostics. Output is host-only.
         let redactionFixtures: [(name: String, url: String, expected: String, forbidden: [String])] = [
             ("userinfo, query and fragment", "https://SENTINEL_USER:SENTINEL_PASS@example.test:8443/watch/SENTINEL_PATH?token=SENTINEL_QUERY#SENTINEL_FRAGMENT",
-             "example.test/watch/…", ["SENTINEL_USER", "SENTINEL_PASS", "SENTINEL_PATH", "SENTINEL_QUERY", "SENTINEL_FRAGMENT", "8443"]),
+             "example.test", ["SENTINEL_USER", "SENTINEL_PASS", "SENTINEL_PATH", "SENTINEL_QUERY", "SENTINEL_FRAGMENT", "8443"]),
             ("schemeless userinfo", "SENTINEL_USER:SENTINEL_PASS@example.test/a/SENTINEL_PATH?k=SENTINEL_QUERY#SENTINEL_FRAGMENT",
-             "example.test/a/…", ["SENTINEL_USER", "SENTINEL_PASS", "SENTINEL_PATH", "SENTINEL_QUERY", "SENTINEL_FRAGMENT"]),
+             "example.test", ["SENTINEL_USER", "SENTINEL_PASS", "SENTINEL_PATH", "SENTINEL_QUERY", "SENTINEL_FRAGMENT"]),
             ("query only", "https://example.test?access_token=SENTINEL_QUERY", "example.test",
              ["SENTINEL_QUERY", "access_token"]),
             ("fragment only", "https://example.test/#access_token=SENTINEL_FRAGMENT", "example.test",
              ["SENTINEL_FRAGMENT", "access_token"]),
-            ("single segment with query", "https://example.test/room?key=SENTINEL_QUERY", "example.test/room",
-             ["SENTINEL_QUERY", "key="]),
-            ("percent-encoded deep path", "https://example.test/a/%53ENTINEL_PATH/b?x=SENTINEL_QUERY", "example.test/a/…",
+            ("single segment with query", "https://example.test/room?key=SENTINEL_QUERY", "example.test",
+             ["SENTINEL_QUERY", "key=", "room"]),
+            ("percent-encoded deep path", "https://example.test/a/%53ENTINEL_PATH/b?x=SENTINEL_QUERY", "example.test",
              ["SENTINEL_QUERY", "%53ENTINEL_PATH"]),
+            ("first-segment sentinel", "https://example.test/SENTINEL_ROOM/x", "example.test", ["SENTINEL_ROOM"]),
+            ("capability token first segment", "https://example.test/sk_live_ABC123def456/x", "example.test", ["sk_live_ABC123def456"]),
         ]
         for fixture in redactionFixtures {
             let shown = URLDisplay.sanitize(fixture.url, verbose: false)
             let leaked = fixture.forbidden.filter { shown.contains($0) }
             reporter.check(
-                "diagnostic URL redaction (\(fixture.name)) emits only the expected host/path prefix",
+                "diagnostic URL redaction (\(fixture.name)) emits only the bare host",
                 passed: shown == fixture.expected && leaked.isEmpty,
                 detail: "got \(shown), leaked \(leaked)"
             )
