@@ -288,11 +288,28 @@ unset before building, and the ephemeral keychain is cleaned up on exit.
 `.github/dependabot.yml` is also a reviewed workflow-adjacent surface: it requests weekly
 GitHub Actions updates from `/`, groups minor and patch updates, and leaves major updates
 ungrouped; no runtime package-manager ecosystem is configured.
-The release upload action `softprops/action-gh-release` is reviewed at v3.0.3 (commit
-`efb35369e0ad2afab669f228072c1b0d510eae64`). The v3 major moves the action from Node 20 to
-Node 24, which the GitHub-hosted `macos-15` runner executes. The release boundary is
-unchanged: the `MoveBreak.app.zip` input, `github.token` binding, tag validation, permissions
-and signing-secret lifecycle. Offline verification does not execute release publication.
+The release upload action `softprops/action-gh-release` is reviewed at v3.0.4 (commit
+`8a0cd651e5b2365bd640854a3fa5dfc70e4875f3`, confirmed by peeling the annotated v3.0.4 tag).
+The [upstream v3.0.3…v3.0.4 comparison](https://github.com/softprops/action-gh-release/compare/v3.0.3...v3.0.4)
+was reviewed on 2026-11-20: the maintenance release changes the changelog, package manifest,
+lockfile, bundled `dist/index.js`, and upstream CI's setup-node pin. Action source and
+`action.yml` are unchanged, including `runs.using: node24`, the bundle entrypoint, inputs,
+and token defaults. The existing GitHub-hosted `macos-15` job already uses this Node runtime;
+no runner, input, or credential migration is required.
+
+The runtime lockfile changes are glob 13.0.6 → 14.0.3, minimatch 10.2.4 → 11.0.4,
+path-scurry 2.0.2 → 3.0.0, lru-cache 11.2.7 → 11.5.3, brace-expansion 5.0.9 → 5.0.12,
+undici 6.28.0 → 6.29.1, and the added `@isaacs/nonrecursive-glob-match` 1.0.3.
+Their declared Node engines allow Node 24. The rebuilt bundle includes the glob-matching
+and HTTP dependency changes; its literal HTTP(S) endpoint inventory is unchanged.
+The glob major changes do not require changing our literal `MoveBreak.app.zip` file input.
+Vitest/coverage 5 and the other development-tool updates belong to upstream testing/building;
+MoveBreak executes the committed bundle and installs no npm dependencies.
+The release boundary is unchanged: the `MoveBreak.app.zip` input, `github.token` binding,
+tag validation, permissions, step-scoped signing secrets, and ephemeral-keychain cleanup.
+Offline verification checks the exact workflow digest and rejection fixtures, but does not
+execute the upstream action, production signing, or release publication. Live upload behavior
+remains outside this maintenance verification; no release is published to test the update.
 `FRAMEWORKS` and `SWIFT_PRIMITIVES` separately constrain runtime imports and reviewed
 process/AppleScript primitive lines, including their ordering and multiplicity.
 
@@ -385,7 +402,7 @@ drift/inventory audit and **not** CVE clearance.
 | Subprocess argument boundaries | `scripts/*.sh`, `.claude/hooks/guard_build_artifacts.py`, the gate's Python | The only Python `subprocess.run`/`check_output` calls are in the gate, use list arguments, no `shell=True`, and only fixed `git`/`bash` plus temp paths; the hook runs no subprocess. Shell scripts are hash-pinned. | Pass. |
 | Allowlists and denial cases | gate `SWIFT_PRIMITIVES`, `APPROVED`, existing negative fixtures | Added process primitives, untracked Swift, runtime imports, download-to-shell and mutable Actions are rejected. Limited: the gate file itself is exempt from `APPROVED` (it is the verifier) and is protected only by review; the build-artifact hook is advisory and fail-open (any error exits 0), not an authorization boundary. | Pass with limits. |
 | Workflow permissions and release secrets | `.github/workflows/build.yml`, `release.yml` | `contents: read` by default; `contents: write` only in the release job; `MACOS_CERT_P12`/`MACOS_CERT_PASSWORD` referenced only in release steps. Configuration inspected only; no secret values obtained. | Pass. |
-| Dependency inventory and pinned Actions | `Sources/MoveBreak/*.swift` imports, `Resources/Info.plist`, `dependabot.yml` | Runtime frameworks: AppKit, SwiftUI, Foundation, CoreAudio, Security, CryptoKit, Darwin; no third-party runtime dependency or manifest. Two Action pins: `actions/checkout@3d3c42e5...` and `softprops/action-gh-release@efb35369...` (full SHAs); Dependabot covers `github-actions` weekly. | Pass (offline inventory only). |
+| Dependency inventory and pinned Actions | `Sources/MoveBreak/*.swift` imports, `Resources/Info.plist`, `dependabot.yml` | Runtime frameworks: AppKit, SwiftUI, Foundation, CoreAudio, Security, CryptoKit, Darwin; no third-party runtime dependency or manifest. Two Action pins: `actions/checkout@3d3c42e5...` and `softprops/action-gh-release@8a0cd651...` (v3.0.4; full SHAs); Dependabot covers `github-actions` weekly. | Pass (offline inventory only). |
 
 Verification at `79f84b0` plus this change: `./scripts/check_security_surface.sh --self-test`
 exit 0 (25 PASS lines), `./scripts/build_app.sh` exit 0, `./build/MoveBreak --self-test` exit 0

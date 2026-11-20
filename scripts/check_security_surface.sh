@@ -16,7 +16,7 @@ import tempfile
 APPROVED = {
     '.claude/hooks/guard_build_artifacts.py': 'b7f9feb1a7228d76dc2050c6610272190f5a4d4912888629a2f38e4f98e144f4',
     '.github/workflows/build.yml': '099707550d923a5ac730d69ab76bcb20f13b257301ea0802a45587cfe2631b56',
-    '.github/workflows/release.yml': '33e509c1b410478904474726d27b84bb8380d27fd361ebcadfd97bdc90a87243',
+    '.github/workflows/release.yml': '1a264224af226fc4d44708c1e59a27c6121f165f054e13f48f02bd481cb027ff',
     '.github/dependabot.yml': '081d6f1bfe9f08a3a2cbf3f10355381b50f0e78dc3c640761249910adc464096',
     'scripts/build_app.sh': '90ca2c4437228264a817767d5060017469e5147b1b135a8b7cd7319615a56ec4',
     'scripts/check_agent_context.sh': '46e34238f40ef6d8a98800f34156b252c03c5e13ee706ab3a7ec7bfad161befc',
